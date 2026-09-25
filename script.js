@@ -4,12 +4,11 @@ let zoneFrame = document.getElementById('zoneFrame');
 const searchBar = document.getElementById('searchBar');
 const sortOptions = document.getElementById('sortOptions');
 const filterOptions = document.getElementById('filterOptions');
-const zonesURL = "https://cdn.jsdelivr.net/npm/gn-math.github.io-main@1.0.5/zones.json";
-const htmlURL = "https://cdn.jsdelivr.net/npm/gn-math.github.io-main@1.0.5/html-main";
+const zonesURL = "https://cdn.jsdelivr.net/gh/freebuisness/assets@main/zones.json";
+const htmlURL = "https://cdn.jsdelivr.net/gh/freebuisness/html@main";
 
-// The npm package does not include the old covers repo.
-// This is intentionally blank until there is a VERIFIED replacement.
-const coverURL = "";
+// Verified replacement cover source from the working GN Math site.
+const coverURL = "https://cdn.jsdelivr.net/gh/freebuisness/covers@main";
 let zones = [];
 let popularityData = {};
 const featuredContainer = document.getElementById('featuredZones');
