@@ -4,16 +4,12 @@ let zoneFrame = document.getElementById('zoneFrame');
 const searchBar = document.getElementById('searchBar');
 const sortOptions = document.getElementById('sortOptions');
 const filterOptions = document.getElementById('filterOptions');
-// https://www.jsdelivr.com/tools/purge
-const zonesurls = [
-    "https://cdn.jsdelivr.net/%67%68/%67%6e%2d%6d%61%74%68/%61%73%73%65%74%73@%6d%61%69%6e/%7a%6f%6e%65%73%2e%6a%73%6f%6e",
-    "https://cdn.jsdelivr.net/gh/gn-math/assets@latest/zones.json",
-    "https://cdn.jsdelivr.net/gh/gn-math/assets@master/zones.json",
-    "https://cdn.jsdelivr.net/gh/gn-math/assets/zones.json"
-];
-let zonesURL = zonesurls[Math.floor(Math.random() * zonesurls.length)];
-const coverURL = "https://cdn.jsdelivr.net/gh/gn-math/covers@main";
-const htmlURL = "https://cdn.jsdelivr.net/gh/gn-math/html@main";
+const zonesURL = "https://cdn.jsdelivr.net/npm/gn-math.github.io-main@1.0.5/zones.json";
+const htmlURL = "https://cdn.jsdelivr.net/npm/gn-math.github.io-main@1.0.5/html-main";
+
+// The npm package does not include the old covers repo.
+// This is intentionally blank until there is a VERIFIED replacement.
+const coverURL = "";
 let zones = [];
 let popularityData = {};
 const featuredContainer = document.getElementById('featuredZones');
