@@ -1,731 +1,2260 @@
-const container = document.getElementById('container');
-const zoneViewer = document.getElementById('zoneViewer');
-let zoneFrame = document.getElementById('zoneFrame');
-const searchBar = document.getElementById('searchBar');
-const sortOptions = document.getElementById('sortOptions');
-const filterOptions = document.getElementById('filterOptions');
-const zonesURL = "https://cdn.jsdelivr.net/gh/freebuisness/assets@main/zones.json";
-const htmlURL = "https://cdn.jsdelivr.net/gh/freebuisness/html@main";
+"use strict";
 
-// Verified replacement cover source from the working GN Math site.
-const coverURL = "https://cdn.jsdelivr.net/gh/freebuisness/covers@main";
+/* ============================================================
+   GN-SHRUB
+   ============================================================ */
+
+
+/* ------------------------------------------------------------
+   DOM
+------------------------------------------------------------ */
+
+const container = document.getElementById("container");
+const featuredContainer = document.getElementById("featuredZones");
+
+const zoneViewer = document.getElementById("zoneViewer");
+const zoneFrame = document.getElementById("zoneFrame");
+
+const searchBar = document.getElementById("searchBar");
+const sortOptions = document.getElementById("sortOptions");
+const filterOptions = document.getElementById("filterOptions");
+
+const refreshButton = document.getElementById("refresh");
+
+const settingsButton = document.getElementById("settings");
+
+const popupOverlay = document.getElementById("popupOverlay");
+const popupTitle = document.getElementById("popupTitle");
+const popupBody = document.getElementById("popupBody");
+
+const loadStatus = document.getElementById("loadStatus");
+const toastElement = document.getElementById("toast");
+
+
+/* ------------------------------------------------------------
+   VERIFIED GN-MATH MIRROR SOURCES
+------------------------------------------------------------ */
+
+const zonesURL =
+    "https://cdn.jsdelivr.net/gh/freebuisness/assets@main/zones.json";
+
+const htmlURL =
+    "https://cdn.jsdelivr.net/gh/freebuisness/html@main";
+
+const coverURL =
+    "https://cdn.jsdelivr.net/gh/freebuisness/covers@main";
+
+
+/*
+    Popularity is optional.
+
+    If this endpoint ever fails, GN-Shrub still works normally.
+    Only the "Popular" ordering loses its hit-count information.
+*/
+
+const popularityURL =
+    "https://data.jsdelivr.com/v1/stats/packages/gh/freebuisness/html@main/files?period=year";
+
+
+/* ------------------------------------------------------------
+   STATE
+------------------------------------------------------------ */
+
 let zones = [];
+
 let popularityData = {};
-const featuredContainer = document.getElementById('featuredZones');
-function toTitleCase(str) {
-  return str.replace(
-    /\w\S*/g,
-    text => text.charAt(0).toUpperCase() + text.substring(1).toLowerCase()
-  );
+
+let currentZone = null;
+
+let zonesRequestController = null;
+
+let toastTimer = null;
+
+let routeIsBeingHandled = false;
+
+
+/* ------------------------------------------------------------
+   HELPERS
+------------------------------------------------------------ */
+
+function toTitleCase(value) {
+    return String(value || "")
+        .replace(
+            /\w\S*/g,
+            word =>
+                word.charAt(0).toUpperCase() +
+                word.substring(1).toLowerCase()
+        );
 }
-async function listZones() {
+
+
+function zoneURL(value) {
+    return String(value || "")
+        .replace(/\{COVER_URL\}/g, coverURL)
+        .replace(/\{HTML_URL\}/g, htmlURL);
+}
+
+
+function cacheBust(url) {
+    const parsed = new URL(url, window.location.href);
+
+    parsed.searchParams.set("_gnshrub", Date.now());
+
+    return parsed.href;
+}
+
+
+function setLoadStatus(message) {
+    if (!loadStatus) {
+        return;
+    }
+
+    loadStatus.textContent = message || "";
+}
+
+
+function showToast(message, timeout = 2400) {
+    if (!toastElement) {
+        return;
+    }
+
+    clearTimeout(toastTimer);
+
+    toastElement.textContent = message;
+
+    toastElement.classList.add("show");
+
+    toastTimer = setTimeout(() => {
+        toastElement.classList.remove("show");
+    }, timeout);
+}
+
+
+function safeExternalHref(value) {
+    if (!value) {
+        return null;
+    }
+
     try {
-      let sharesponse;
-      let shajson;
-      let sha;
-        try {
-          sharesponse = await fetch("https://api.github.com/repos/gn-math/assets/commits?t="+Date.now());
-        } catch (error) {}
-        if (sharesponse && sharesponse.status === 200) {
-          try {
-            shajson = await sharesponse.json();
-            sha = shajson[0]['sha'];
-            if (sha) {
-                zonesURL = `https://cdn.jsdelivr.net/gh/gn-math/assets@${sha}/zones.json`;
-            }
-          } catch (error) {
-            try {
-                let secondarysharesponse = await fetch("https://raw.githubusercontent.com/gn-math/xml/refs/heads/main/sha.txt?t="+Date.now());
-                if (secondarysharesponse && secondarysharesponse.status === 200) {
-                    sha = (await secondarysharesponse.text()).trim();
-                    if (sha) {
-                        zonesURL = `https://cdn.jsdelivr.net/gh/gn-math/assets@${sha}/zones.json`;
-                    }
-                }
-            } catch(error) {}
-          }
-        }
-        const response = await fetch(zonesURL+"?t="+Date.now());
-        const json = await response.json();
-        zones = json;
-        zones[0].featured = true; // always gonna be the discord
-        await fetchPopularity();
-        sortZones();
-        const search = new URLSearchParams(window.location.search);
-        const id = search.get('id');
-        const embed = window.location.hash.includes("embed");
-        if (id) {
-            const zone = zones.find(zone => zone.id + '' == id + '');
-            if (zone) {
-                if (embed) {
-                    if (zone.url.startsWith("http")) {
-                        window.open(zone.url, "_blank");
-                    } else {
-                        const url = zone.url.replace("{COVER_URL}", coverURL).replace("{HTML_URL}", htmlURL);
-                        fetch(url+"?t="+Date.now()).then(response => response.text()).then(html => {
-                            document.documentElement.innerHTML = html;
-                            const popup = document.createElement("div");
-                            popup.style.position = "fixed";
-                            popup.style.bottom = "20px";
-                            popup.style.right = "20px";
-                            popup.style.backgroundColor = "#cce5ff";
-                            popup.style.color = "#004085";
-                            popup.style.padding = "10px";
-                            popup.style.border = "1px solid #b8daff";
-                            popup.style.borderRadius = "5px";
-                            popup.style.boxShadow = "0px 0px 10px rgba(0,0,0,0.1)";
-                            popup.style.fontFamily = "Arial, sans-serif";
-                            
-                            popup.innerHTML = `Play more games at <a href="https://gn-math.github.io" target="_blank" style="color:#004085; font-weight:bold;">https://gn-math.github.io</a>!`;
-                            
-                            const closeBtn = document.createElement("button");
-                            closeBtn.innerText = "✖";
-                            closeBtn.style.marginLeft = "10px";
-                            closeBtn.style.background = "none";
-                            closeBtn.style.border = "none";
-                            closeBtn.style.cursor = "pointer";
-                            closeBtn.style.color = "#004085";
-                            closeBtn.style.fontWeight = "bold";
-                            
-                            closeBtn.onclick = () => popup.remove();
-                            popup.appendChild(closeBtn);
-                            document.body.appendChild(popup);
-                            document.documentElement.querySelectorAll('script').forEach(oldScript => {
-                                const newScript = document.createElement('script');
-                                if (oldScript.src) {
-                                    newScript.src = oldScript.src;
-                                } else {
-                                    newScript.textContent = oldScript.textContent;
-                                }
-                                document.body.appendChild(newScript);
-                            });
-                        }).catch(error => alert("Failed to load zone: " + error));
-                    }
-                } else {
-                    openZone(zone);
-                }
-            }
+        const url = new URL(value, window.location.href);
+
+        if (
+            url.protocol !== "http:" &&
+            url.protocol !== "https:"
+        ) {
+            return null;
         }
 
-        let alltags = [];
-        for (const obj of json) {
-            if (Array.isArray(obj.special)) {
-                alltags.push(...obj.special);
-            }
-        }
-
-        alltags = [...new Set(alltags)];
-        let filteroption = document.getElementById("filterOptions");
-        if (filteroption && filteroption.children.length > 1) {
-            while (filteroption.children.length > 1) {
-                filteroption.removeChild(filteroption.lastElementChild);
-            }
-        }
-        for (const tag of alltags) {
-            const opt = document.createElement("option");
-            opt.value = tag;
-            opt.textContent = toTitleCase(tag);
-            filteroption.appendChild(opt);
-        }
-    } catch (error) {
-        console.error(error);
-        container.innerHTML = `Error loading zones: ${error}`;
+        return url.href;
+    } catch {
+        return null;
     }
 }
+
+
+function safeFileName(value) {
+    const result = String(value || "zone")
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120);
+
+    return result || "zone";
+}
+
+
+function escapeHTML(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+
+/* ------------------------------------------------------------
+   GAME HTML BASE HANDLING
+
+   Games are fetched from jsDelivr and written into our iframe.
+
+   A <base> tag makes relative resources such as:
+       script.js
+       style.css
+       assets/file.png
+       Build/game.wasm
+
+   resolve against the actual game's CDN directory instead of
+   accidentally resolving against the GN-Shrub website.
+------------------------------------------------------------ */
+
+function zoneBaseFor(url) {
+    try {
+        return new URL(".", url).href;
+    } catch {
+        return url;
+    }
+}
+
+
+function injectZoneBase(html, url) {
+    const baseURL = zoneBaseFor(url);
+
+    const safeBase =
+        String(baseURL)
+            .replace(/&/g, "&amp;")
+            .replace(/"/g, "&quot;");
+
+    const baseTag =
+        `<base href="${safeBase}">`;
+
+    const existingBase =
+        /<base\b[^>]*>/i;
+
+    if (existingBase.test(html)) {
+        return html.replace(
+            existingBase,
+            baseTag
+        );
+    }
+
+    const headTag =
+        /<head\b[^>]*>/i;
+
+    if (headTag.test(html)) {
+        return html.replace(
+            headTag,
+            match =>
+                `${match}\n${baseTag}`
+        );
+    }
+
+    const htmlTag =
+        /<html\b[^>]*>/i;
+
+    if (htmlTag.test(html)) {
+        return html.replace(
+            htmlTag,
+            match =>
+                `${match}\n<head>${baseTag}</head>`
+        );
+    }
+
+    return (
+        `<!DOCTYPE html>` +
+        `<html>` +
+        `<head>${baseTag}</head>` +
+        `<body>${html}</body>` +
+        `</html>`
+    );
+}
+
+
+/* ------------------------------------------------------------
+   FETCH HELPERS
+------------------------------------------------------------ */
+
+async function fetchTextChecked(url, options = {}) {
+    const response = await fetch(
+        url,
+        {
+            cache: "no-store",
+            ...options
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(
+            `HTTP ${response.status} while loading ${url}`
+        );
+    }
+
+    return response.text();
+}
+
+
+async function fetchJSONChecked(url, options = {}) {
+    const response = await fetch(
+        url,
+        {
+            cache: "no-store",
+            ...options
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error(
+            `HTTP ${response.status} while loading ${url}`
+        );
+    }
+
+    return response.json();
+}
+
+
+/* ------------------------------------------------------------
+   POPULARITY
+------------------------------------------------------------ */
+
 async function fetchPopularity() {
+    popularityData = {};
+
     try {
-        const response = await fetch("https://data.jsdelivr.com/v1/stats/packages/gh/gn-math/html@main/files?period=year");
-        const data = await response.json();
-        data.forEach(file => {
-            const idMatch = file.name.match(/\/(\d+)\.html$/);
-            if (idMatch) {
-                const id = parseInt(idMatch[1]);
-                popularityData[id] = file.hits.total;
+        const data =
+            await fetchJSONChecked(
+                popularityURL
+            );
+
+        if (!Array.isArray(data)) {
+            return;
+        }
+
+        for (const file of data) {
+            const name =
+                String(file?.name || "");
+
+            const idMatch =
+                name.match(
+                    /\/(\d+)\.html$/i
+                );
+
+            if (!idMatch) {
+                continue;
             }
-        });
+
+            const id =
+                Number(idMatch[1]);
+
+            const hits =
+                Number(
+                    file?.hits?.total ??
+                    file?.hits ??
+                    0
+                );
+
+            if (
+                Number.isFinite(id) &&
+                Number.isFinite(hits)
+            ) {
+                popularityData[id] = hits;
+            }
+        }
     } catch (error) {
-        popularityData[0] = 0;
+        /*
+            Popularity is intentionally non-critical.
+
+            Do not prevent the entire site from loading just because
+            jsDelivr's statistics endpoint is temporarily unavailable.
+        */
+
+        console.warn(
+            "Popularity data unavailable:",
+            error
+        );
     }
 }
+
+
+/* ------------------------------------------------------------
+   LOAD ZONES
+------------------------------------------------------------ */
+
+async function listZones() {
+    if (zonesRequestController) {
+        zonesRequestController.abort();
+    }
+
+    zonesRequestController =
+        new AbortController();
+
+    const signal =
+        zonesRequestController.signal;
+
+    refreshButton?.classList.add(
+        "is-loading"
+    );
+
+    if (refreshButton) {
+        refreshButton.disabled = true;
+    }
+
+    setLoadStatus(
+        "Loading zones..."
+    );
+
+    if (!zones.length) {
+        container.innerHTML =
+            `<div class="loading-message">Loading...</div>`;
+    }
+
+    try {
+        const popularityPromise =
+            fetchPopularity();
+
+        const json =
+            await fetchJSONChecked(
+                cacheBust(zonesURL),
+                { signal }
+            );
+
+        if (!Array.isArray(json)) {
+            throw new Error(
+                "zones.json did not return an array."
+            );
+        }
+
+        zones =
+            json.filter(
+                zone =>
+                    zone &&
+                    typeof zone === "object" &&
+                    zone.name != null &&
+                    zone.url != null
+            );
+
+        if (zones.length) {
+            /*
+                GN-Math traditionally keeps its first special entry
+                featured. Preserve that behavior.
+            */
+
+            zones[0].featured = true;
+        }
+
+        await popularityPromise;
+
+        buildTagOptions();
+
+        sortZones();
+
+        setLoadStatus(
+            `${zones.length.toLocaleString()} zones loaded`
+        );
+
+        await openZoneFromCurrentURL();
+
+    } catch (error) {
+        if (
+            error?.name ===
+            "AbortError"
+        ) {
+            return;
+        }
+
+        console.error(
+            "Unable to load zones:",
+            error
+        );
+
+        setLoadStatus(
+            "Unable to load zones."
+        );
+
+        container.innerHTML = `
+            <div class="error-message">
+                Could not load zones.<br>
+                ${escapeHTML(error.message)}
+            </div>
+        `;
+    } finally {
+        refreshButton?.classList.remove(
+            "is-loading"
+        );
+
+        if (refreshButton) {
+            refreshButton.disabled = false;
+        }
+    }
+}
+
+
+/* ------------------------------------------------------------
+   TAGS
+------------------------------------------------------------ */
+
+function buildTagOptions() {
+    const previousValue =
+        filterOptions.value;
+
+    const tags = new Set();
+
+    for (const zone of zones) {
+        if (!Array.isArray(zone.special)) {
+            continue;
+        }
+
+        for (const tag of zone.special) {
+            if (
+                typeof tag === "string" &&
+                tag.trim()
+            ) {
+                tags.add(tag.trim());
+            }
+        }
+    }
+
+    const sortedTags =
+        [...tags].sort(
+            (a, b) =>
+                a.localeCompare(
+                    b,
+                    undefined,
+                    {
+                        sensitivity: "base"
+                    }
+                )
+        );
+
+    filterOptions.innerHTML = "";
+
+    const allOption =
+        document.createElement("option");
+
+    allOption.value = "none";
+    allOption.textContent = "Tag";
+
+    filterOptions.appendChild(
+        allOption
+    );
+
+    for (const tag of sortedTags) {
+        const option =
+            document.createElement("option");
+
+        option.value = tag;
+        option.textContent =
+            toTitleCase(tag);
+
+        filterOptions.appendChild(
+            option
+        );
+    }
+
+    if (
+        [...filterOptions.options]
+            .some(
+                option =>
+                    option.value ===
+                    previousValue
+            )
+    ) {
+        filterOptions.value =
+            previousValue;
+    }
+}
+
+
+/* ------------------------------------------------------------
+   SORTING
+------------------------------------------------------------ */
+
+function sortZoneList(list) {
+    const sorted =
+        [...list];
+
+    const sortBy =
+        sortOptions.value;
+
+    if (sortBy === "id") {
+        sorted.sort(
+            (a, b) =>
+                Number(b.id || 0) -
+                Number(a.id || 0)
+        );
+    }
+
+    else if (sortBy === "popular") {
+        sorted.sort(
+            (a, b) => {
+                const aPopularity =
+                    Number(
+                        a.popularity ??
+                        popularityData[
+                            Number(a.id)
+                        ] ??
+                        0
+                    );
+
+                const bPopularity =
+                    Number(
+                        b.popularity ??
+                        popularityData[
+                            Number(b.id)
+                        ] ??
+                        0
+                    );
+
+                if (
+                    bPopularity !==
+                    aPopularity
+                ) {
+                    return (
+                        bPopularity -
+                        aPopularity
+                    );
+                }
+
+                return (
+                    Number(b.id || 0) -
+                    Number(a.id || 0)
+                );
+            }
+        );
+    }
+
+    else {
+        sorted.sort(
+            (a, b) =>
+                String(a.name || "")
+                    .localeCompare(
+                        String(
+                            b.name || ""
+                        ),
+                        undefined,
+                        {
+                            sensitivity:
+                                "base"
+                        }
+                    )
+        );
+    }
+
+    /*
+        Preserve special -1 entries at the top.
+    */
+
+    sorted.sort(
+        (a, b) => {
+            if (a.id === -1) {
+                return -1;
+            }
+
+            if (b.id === -1) {
+                return 1;
+            }
+
+            return 0;
+        }
+    );
+
+    return sorted;
+}
+
 
 function sortZones() {
-    const sortBy = sortOptions.value;
-    if (sortBy === 'name') {
-        zones.sort((a, b) => a.name.localeCompare(b.name));
-    } else if (sortBy === 'id') {
-        zones.sort((a, b) => a.id - b.id);
-    } else if (sortBy === 'popular') {
-        zones.sort((a, b) => (popularityData[b.id] || 0) - (popularityData[a.id] || 0));
-    }
-    zones.sort((a, b) => (a.id === -1 ? -1 : b.id === -1 ? 1 : 0));
-    if (featuredContainer.innerHTML === "") {
-        const featured = zones.filter(z => z.featured);
-        displayFeaturedZones(featured);
-    }
-    displayZones(zones);
+    renderZones();
 }
 
-function displayFeaturedZones(featuredZones) {
-    featuredContainer.innerHTML = "";
-    featuredZones.forEach((file, index) => {
-        const zoneItem = document.createElement("div");
-        zoneItem.className = "zone-item";
-        zoneItem.onclick = () => openZone(file);
-        const img = document.createElement("img");
-        img.dataset.src = file.cover.replace("{COVER_URL}", coverURL).replace("{HTML_URL}", htmlURL);
-        img.alt = file.name;
-        img.loading = "lazy";
-        img.className = "lazy-zone-img";
-        zoneItem.appendChild(img);
-        const button = document.createElement("button");
-        button.textContent = file.name;
-        button.onclick = (event) => {
-            event.stopPropagation();
-            openZone(file);
-        };
-        zoneItem.appendChild(button);
-        featuredContainer.appendChild(zoneItem);
-    });
-    if (featuredContainer.innerHTML === "") {
-        featuredContainer.innerHTML = "No featured zones found.";
-    } else {
-        document.getElementById("allZonesSummary").textContent = `Featured Zones (${featuredZones.length})`;
-    }
 
-    const lazyImages = document.querySelectorAll('#featuredZones img.lazy-zone-img');
-    const imageObserver = new IntersectionObserver((entries, observer) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting && !zoneViewer.hidden) {
-                const img = entry.target;
-                img.src = img.dataset.src;
-                img.classList.remove("lazy-zone-img");
-                observer.unobserve(img);
-            }
-        });
-    }, {
-        rootMargin: "100px", 
-        threshold: 0.1
-    });
+/* ------------------------------------------------------------
+   FILTERING
+------------------------------------------------------------ */
 
-    lazyImages.forEach(img => {
-        imageObserver.observe(img);
-    });
-}
+function getFilteredZones() {
+    const query =
+        searchBar.value
+            .trim()
+            .toLowerCase();
 
-function displayZones(zones) {
-    container.innerHTML = "";
-    zones.forEach((file, index) => {
-        const zoneItem = document.createElement("div");
-        zoneItem.className = "zone-item";
-        zoneItem.onclick = () => openZone(file);
-        const img = document.createElement("img");
-        img.dataset.src = file.cover.replace("{COVER_URL}", coverURL).replace("{HTML_URL}", htmlURL);
-        img.alt = file.name;
-        img.loading = "lazy";
-        img.className = "lazy-zone-img";
-        zoneItem.appendChild(img);
-        const button = document.createElement("button");
-        button.textContent = file.name;
-        button.onclick = (event) => {
-            event.stopPropagation();
-            openZone(file);
-        };
-        zoneItem.appendChild(button);
-        container.appendChild(zoneItem);
-    });
-    if (container.innerHTML === "") {
-        container.innerHTML = "No zones found.";
-    } else {
-        document.getElementById("allSummary").textContent = `All Zones (${zones.length})`;
-    }
+    const tag =
+        filterOptions.value;
 
-    const lazyImages = document.querySelectorAll('img.lazy-zone-img');
-    const imageObserver = new IntersectionObserver((entries, observer) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting && !zoneViewer.hidden) {
-                const img = entry.target;
-                img.src = img.dataset.src;
-                img.classList.remove("lazy-zone-img");
-                observer.unobserve(img);
-            }
-        });
-    }, {
-        rootMargin: "100px", 
-        threshold: 0.1
-    });
+    return zones.filter(
+        zone => {
+            const name =
+                String(
+                    zone.name || ""
+                ).toLowerCase();
 
-    lazyImages.forEach(img => {
-        imageObserver.observe(img);
-    });
-}
+            const author =
+                String(
+                    zone.author || ""
+                ).toLowerCase();
 
-function filterZones2() {
-    const query = filterOptions.value;
-    if (query === "none") {
-        displayZones(zones);
-    } else {
-        const filteredZones = zones.filter(zone => zone.special?.includes(query));
-        if (query.length !== 0) {
-            document.getElementById("featuredZonesWrapper").removeAttribute("open");
+            const specials =
+                Array.isArray(
+                    zone.special
+                )
+                    ? zone.special
+                    : [];
+
+            const matchesSearch =
+                !query ||
+                name.includes(query) ||
+                author.includes(query);
+
+            const matchesTag =
+                tag === "none" ||
+                specials.includes(tag);
+
+            return (
+                matchesSearch &&
+                matchesTag
+            );
         }
-        displayZones(filteredZones);
-    }
+    );
 }
+
 
 function filterZones() {
-    const query = searchBar.value.toLowerCase();
-    const filteredZones = zones.filter(zone => zone.name.toLowerCase().includes(query));
-    if (query.length !== 0) {
-        document.getElementById("featuredZonesWrapper").removeAttribute("open");
+    if (
+        searchBar.value.trim()
+    ) {
+        document
+            .getElementById(
+                "featuredZonesWrapper"
+            )
+            ?.removeAttribute(
+                "open"
+            );
     }
-    displayZones(filteredZones);
+
+    renderZones();
 }
 
-function openZone(file) {
-    if (file.url.startsWith("http")) {
-        window.open(file.url, "_blank");
-    } else {
-        const url = file.url.replace("{COVER_URL}", coverURL).replace("{HTML_URL}", htmlURL);
-        fetch(url+"?t="+Date.now()).then(response => response.text()).then(html => {
-            if (zoneFrame.contentDocument === null) {
-                zoneFrame = document.createElement("iframe");
-                zoneFrame.id = "zoneFrame";
-                zoneViewer.appendChild(zoneFrame);
-            }
-            zoneFrame.contentDocument.open();
-            zoneFrame.contentDocument.write(html);
-            zoneFrame.contentDocument.close();
-            document.getElementById('zoneName').textContent = file.name;
-            document.getElementById('zoneId').textContent = file.id;
-            document.getElementById('zoneAuthor').textContent = "by " + file.author;
-            if (file.authorLink) {
-                document.getElementById('zoneAuthor').href = file.authorLink;
-            }
-            zoneViewer.style.display = "block";
-            const url = new URL(window.location);
-            url.searchParams.set('id', file.id);
-            history.pushState(null, '', url.toString());
-            zoneViewer.hidden = true;
-        }).catch(error => alert("Failed to load zone: " + error));
+
+function filterZones2() {
+    if (
+        filterOptions.value !==
+        "none"
+    ) {
+        document
+            .getElementById(
+                "featuredZonesWrapper"
+            )
+            ?.removeAttribute(
+                "open"
+            );
     }
+
+    renderZones();
 }
 
-function aboutBlank() {
-    const newWindow = window.open("about:blank", "_blank");
-    let zone = zones.find(zone => zone.id + '' === document.getElementById('zoneId').textContent).url.replace("{COVER_URL}", coverURL).replace("{HTML_URL}", htmlURL);
-    fetch(zone+"?t="+Date.now()).then(response => response.text()).then(html => {
-        if (newWindow) {
-            newWindow.document.open();
-            newWindow.document.write(html);
-            newWindow.document.close();
+
+/* ------------------------------------------------------------
+   CARD CREATION
+------------------------------------------------------------ */
+
+function createZoneCard(file) {
+    const zoneItem =
+        document.createElement("article");
+
+    zoneItem.className =
+        "zone-item";
+
+    zoneItem.tabIndex = 0;
+
+    const image =
+        document.createElement("img");
+
+    image.alt =
+        String(file.name || "Zone");
+
+    image.loading = "lazy";
+
+    image.decoding = "async";
+
+    image.referrerPolicy =
+        "no-referrer";
+
+    const resolvedCover =
+        zoneURL(
+            file.cover ||
+            "favicon.png"
+        );
+
+    image.src =
+        resolvedCover ||
+        "favicon.png";
+
+    let fallbackUsed = false;
+
+    image.addEventListener(
+        "error",
+        () => {
+            if (fallbackUsed) {
+                return;
+            }
+
+            fallbackUsed = true;
+
+            image.src =
+                "favicon.png";
         }
-    })
-}
+    );
 
-function closeZone() {
-    zoneViewer.hidden = false;
-    zoneViewer.style.display = "none";
-    zoneViewer.removeChild(zoneFrame);
-    const url = new URL(window.location);
-    url.searchParams.delete('id');
-    history.pushState(null, '', url.toString());
-}
+    const button =
+        document.createElement(
+            "button"
+        );
 
-function downloadZone() {
-    let zone = zones.find(zone => zone.id + '' === document.getElementById('zoneId').textContent);
-    fetch(zone.url.replace("{HTML_URL}", htmlURL)+"?t="+Date.now()).then(res => res.text()).then(text => {
-        const blob = new Blob([text], {
-            type: "text/plain;charset=utf-8"
-        });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = zone.name + ".html";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    });
-}
+    button.type = "button";
 
-function fullscreenZone() {
-    if (zoneFrame.requestFullscreen) {
-        zoneFrame.requestFullscreen();
-    } else if (zoneFrame.mozRequestFullScreen) {
-        zoneFrame.mozRequestFullScreen();
-    } else if (zoneFrame.webkitRequestFullscreen) {
-        zoneFrame.webkitRequestFullscreen();
-    } else if (zoneFrame.msRequestFullscreen) {
-        zoneFrame.msRequestFullscreen();
-    }
-}
+    const title =
+        document.createElement(
+            "span"
+        );
 
-function sanitizeData(obj, maxStringLen = 1000, maxArrayLen = 10000) {
-    if (typeof obj === 'string') {
-      return obj.length > maxStringLen ? obj.slice(0, maxStringLen) + '...[truncated]' : obj;
-    }
-    
-    if (obj instanceof Uint8Array) {
-      if (obj.length > maxArrayLen) {
-        return `[Uint8Array too large (${obj.length} bytes), truncated]`;
-      }
-      return obj;
-    }
-    
-    if (Array.isArray(obj)) {
-      return obj.map(item => sanitizeData(item, maxStringLen, maxArrayLen));
-    }
-    
-    if (obj && typeof obj === 'object') {
-      const newObj = {};
-      for (const key in obj) {
-        if (obj.hasOwnProperty(key)) {
-          newObj[key] = sanitizeData(obj[key], maxStringLen, maxArrayLen);
+    title.className =
+        "zone-title-text";
+
+    title.textContent =
+        String(
+            file.name ||
+            "Unnamed Zone"
+        );
+
+    button.appendChild(
+        title
+    );
+
+    button.addEventListener(
+        "click",
+        event => {
+            event.stopPropagation();
+
+            openZone(file);
         }
-      }
-      return newObj;
-    }
-    
-    return obj;
-  }
+    );
 
-async function saveData() {
-    alert("This might take a while, dont touch anything other than this OK button");
-    const result = {};
-    result.cookies = document.cookie;
-    result.localStorage = {...localStorage};
-    result.sessionStorage = {...sessionStorage};
-    result.indexedDB = {};
-    const dbs = await indexedDB.databases();
-    for (const dbInfo of dbs) {
-      if (!dbInfo.name) continue;
-      result.indexedDB[dbInfo.name] = {};
-      await new Promise((resolve, reject) => {
-        const openRequest = indexedDB.open(dbInfo.name, dbInfo.version);
-        openRequest.onerror = () => reject(openRequest.error);
-        openRequest.onsuccess = () => {
-          const db = openRequest.result;
-          const storeNames = Array.from(db.objectStoreNames);
-          if (storeNames.length === 0) {
-            resolve();
-            return;
-          }
-          const transaction = db.transaction(storeNames, "readonly");
-          const storePromises = [];
-          for (const storeName of storeNames) {
-            result.indexedDB[dbInfo.name][storeName] = [];
-            const store = transaction.objectStore(storeName);
-            const getAllRequest = store.getAll();
-            const p = new Promise((res, rej) => {
-              getAllRequest.onsuccess = () => {
-                result.indexedDB[dbInfo.name][storeName] = sanitizeData(getAllRequest.result, 1000, 100);
-                res();
-              };
-              getAllRequest.onerror = () => rej(getAllRequest.error);
-            });
-            storePromises.push(p);
-          }
-          Promise.all(storePromises).then(() => resolve());
-        };
-      });
-    }
-
-    result.caches = {};
-    const cacheNames = await caches.keys();
-    for (const cacheName of cacheNames) {
-      const cache = await caches.open(cacheName);
-      const requests = await cache.keys();
-      result.caches[cacheName] = [];
-      for (const req of requests) {
-        const response = await cache.match(req);
-        if (!response) continue;
-        const cloned = response.clone();
-        const contentType = cloned.headers.get('content-type') || '';
-        let body;
-        try {
-          if (contentType.includes('application/json')) {
-            body = await cloned.json();
-          } else if (contentType.includes('text') || contentType.includes('javascript')) {
-            body = await cloned.text();
-          } else {
-            const buffer = await cloned.arrayBuffer();
-            body = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-          }
-        } catch (e) {
-          body = '[Unable to read body]';
+    zoneItem.addEventListener(
+        "click",
+        () => {
+            openZone(file);
         }
-        result.caches[cacheName].push({
-          url: req.url,
-          body,
-          contentType
-        });
-      }
-    }
-  
-    alert("Done, wait for the download to come");
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([JSON.stringify(result)], {
-        type: "application/octet-stream"
-    }));
-    link.download = `${Date.now()}.data`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  }
-  
-  async function loadData(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async function (e) {
-        const data = JSON.parse(e.target.result);
-        if (data.cookies) {
-            data.cookies.split(';').forEach(cookie => {
-              document.cookie = cookie.trim();
-            });
-          }
-        
-          if (data.localStorage) {
-            for (const key in data.localStorage) {
-              localStorage.setItem(key, data.localStorage[key]);
-            }
-          }
-        
-          if (data.sessionStorage) {
-            for (const key in data.sessionStorage) {
-              sessionStorage.setItem(key, data.sessionStorage[key]);
-            }
-          }
-        
-          if (data.indexedDB) {
-            for (const dbName in data.indexedDB) {
-              const stores = data.indexedDB[dbName];
-              await new Promise((resolve, reject) => {
-                const request = indexedDB.open(dbName, 1);
-                request.onupgradeneeded = e => {
-                  const db = e.target.result;
-                  for (const storeName in stores) {
-                    if (!db.objectStoreNames.contains(storeName)) {
-                      db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
-                    }
-                  }
-                };
-                request.onsuccess = e => {
-                  const db = e.target.result;
-                  const transaction = db.transaction(Object.keys(stores), 'readwrite');
-                  transaction.onerror = () => reject(transaction.error);
-                  let pendingStores = Object.keys(stores).length;
-        
-                  for (const storeName in stores) {
-                    const objectStore = transaction.objectStore(storeName);
-                    objectStore.clear().onsuccess = () => {
-                      for (const item of stores[storeName]) {
-                        objectStore.put(item);
-                      }
-                      pendingStores--;
-                      if (pendingStores === 0) resolve();
-                    };
-                  }
-                };
-                request.onerror = () => reject(request.error);
-              });
-            }
-          }
-        
-          if (data.caches) {
-            for (const cacheName in data.caches) {
-              const cache = await caches.open(cacheName);
-              await cache.keys().then(keys => Promise.all(keys.map(k => cache.delete(k)))); // clear existing
-        
-              for (const entry of data.caches[cacheName]) {
-                let responseBody;
-                if (entry.contentType.includes('application/json')) {
-                  responseBody = JSON.stringify(entry.body);
-                } else if (entry.contentType.includes('text') || entry.contentType.includes('javascript')) {
-                  responseBody = entry.body;
-                } else {
-                  const binaryStr = atob(entry.body);
-                  const len = binaryStr.length;
-                  const bytes = new Uint8Array(len);
-                  for (let i = 0; i < len; i++) {
-                    bytes[i] = binaryStr.charCodeAt(i);
-                  }
-                  responseBody = bytes.buffer;
-                }
-                const headers = new Headers({ 'content-type': entry.contentType });
-                const response = new Response(responseBody, { headers });
-                await cache.put(entry.url, response);
-              }
-            }
-          }
-        alert("Data loaded");
-    };
-    alert("This might take a while, dont touch anything other than this OK button");
-    reader.readAsText(file);
-  }
+    );
 
-function darkMode() {
-    document.body.classList.toggle("dark-mode");
+    zoneItem.addEventListener(
+        "keydown",
+        event => {
+            if (
+                event.key === "Enter" ||
+                event.key === " "
+            ) {
+                event.preventDefault();
+
+                openZone(file);
+            }
+        }
+    );
+
+    zoneItem.append(
+        image,
+        button
+    );
+
+    return zoneItem;
 }
 
-function cloakIcon(url) {
-    const link = document.querySelector("link[rel~='icon']");
-    link.rel = "icon";
-    if ((url+"").trim().length === 0) {
-        link.href = "favicon.png";
-    } else {
-        link.href = url;
-    }
-    document.head.appendChild(link);
-}
-function cloakName(string) {
-    if ((string+"").trim().length === 0) {
-        document.title = "gn-math";
+
+/* ------------------------------------------------------------
+   RENDER
+------------------------------------------------------------ */
+
+function displayFeaturedZones(
+    featuredZones
+) {
+    featuredContainer.innerHTML =
+        "";
+
+    if (!featuredZones.length) {
+        featuredContainer.innerHTML = `
+            <div class="empty-message">
+                No featured zones found.
+            </div>
+        `;
+
+        document.getElementById(
+            "allZonesSummary"
+        ).textContent =
+            "Featured Zones";
+
         return;
     }
-    document.title = string;
+
+    const fragment =
+        document.createDocumentFragment();
+
+    for (
+        const file
+        of featuredZones
+    ) {
+        fragment.appendChild(
+            createZoneCard(file)
+        );
+    }
+
+    featuredContainer.appendChild(
+        fragment
+    );
+
+    document.getElementById(
+        "allZonesSummary"
+    ).textContent =
+        `Featured Zones (${featuredZones.length})`;
 }
 
-function tabCloak() {
-    closePopup();
-    document.getElementById('popupTitle').textContent = "Tab Cloak";
-    const popupBody = document.getElementById('popupBody');
-    popupBody.innerHTML = `
-        <label for="tab-cloak-textbox" style="font-weight: bold;">Set Tab Title:</label><br>
-        <input type="text" id="tab-cloak-textbox" placeholder="Enter new tab name..." oninput="cloakName(this.value)">
-        <br><br><br><br>
-        <label for="tab-cloak-textbox" style="font-weight: bold;">Set Tab Icon:</label><br>
-        <input type="text" id="tab-cloak-textbox" placeholder="Enter new tab icon..." oninput='cloakIcon(this.value)'>
-        <br><br><br>
-    `;
-    popupBody.contentEditable = false;
-    document.getElementById('popupOverlay').style.display = "flex";
+
+function displayZones(
+    displayedZones
+) {
+    container.innerHTML = "";
+
+    if (!displayedZones.length) {
+        container.innerHTML = `
+            <div class="empty-message">
+                No zones match your search.
+            </div>
+        `;
+
+        document.getElementById(
+            "allSummary"
+        ).textContent =
+            "All Zones (0)";
+
+        return;
+    }
+
+    const fragment =
+        document.createDocumentFragment();
+
+    for (
+        const file
+        of displayedZones
+    ) {
+        fragment.appendChild(
+            createZoneCard(file)
+        );
+    }
+
+    container.appendChild(
+        fragment
+    );
+
+    document.getElementById(
+        "allSummary"
+    ).textContent =
+        `All Zones (${displayedZones.length})`;
 }
 
-const settings = document.getElementById('settings');
-settings.addEventListener('click', () => {
-    document.getElementById('popupTitle').textContent = "Settings";
-    const popupBody = document.getElementById('popupBody');
-    popupBody.innerHTML = `
-    <button class="settings-button" onclick="darkMode()">Toggle Dark Mode</button>
-    <br><br>
-    <button class="settings-button" onclick="tabCloak()">Tab Cloak</button>
-    <br>
-    `;
-    popupBody.contentEditable = false;
-    document.getElementById('popupOverlay').style.display = "flex";
-});
 
-function showContact() {
-    document.getElementById('popupTitle').textContent = "Contact";
-    const popupBody = document.getElementById('popupBody');
-    popupBody.innerHTML = `
-    <p>Discord: https://discord.gg/NAFw4ykZ7n</p>
-    <p>Email: gn.math.business@gmail.com</p>`;
-    popupBody.contentEditable = false;
-    document.getElementById('popupOverlay').style.display = "flex";
+function renderZones() {
+    const filtered =
+        getFilteredZones();
+
+    const sorted =
+        sortZoneList(filtered);
+
+    displayZones(sorted);
+
+    const featured =
+        sortZoneList(
+            zones.filter(
+                zone =>
+                    zone.featured
+            )
+        );
+
+    displayFeaturedZones(
+        featured
+    );
 }
 
-function loadPrivacy() {
-    document.getElementById('popupTitle').textContent = "Privacy Policy";
-    const popupBody = document.getElementById('popupBody');
-    popupBody.innerHTML = `
-        <div style="max-height: 60vh; overflow-y: auto;">
-            <h2>PRIVACY POLICY</h2>
-            <p>Last updated April 17, 2025</p>
-            <p>This Privacy Notice for gn-math ("we," "us," or "our"), describes how and why we might access, collect, store, use, and/or share ("process") your personal information when you use our services ("Services"), including when you:</p>
-            <ul>
-                <li>Visit our website at <a href="https://gn-math.github.io">https://gn-math.github.io</a>, or any website of ours that links to this Privacy Notice</li>
-                <li>Engage with us in other related ways, including any sales, marketing, or events</li>
-            </ul>
-            <p>Questions or concerns? Reading this Privacy Notice will help you understand your privacy rights and choices. We are responsible for making decisions about how your personal information is processed. If you do not agree with our policies and practices, please do not use our Services. If you still have any questions or concerns, please contact us at <a href="https://discord.gg/NAFw4ykZ7n">https://discord.gg/NAFw4ykZ7n</a>.</p>
-            
-            <h3>SUMMARY OF KEY POINTS</h3>
-            <p>This summary provides key points from our Privacy Notice, but you can find out more details about any of these topics by clicking the link following each key point or by using our table of contents below to find the section you are looking for.</p>
-            
-            <p><strong>What personal information do we process?</strong> When you visit, use, or navigate our Services, we may process personal information depending on how you interact with us and the Services, the choices you make, and the products and features you use. Learn more about personal information you disclose to us.</p>
-            
-            <p><strong>Do we process any sensitive personal information?</strong> Some of the information may be considered "special" or "sensitive" in certain jurisdictions, for example your racial or ethnic origins, sexual orientation, and religious beliefs. We do not process sensitive personal information.</p>
-            
-            <p><strong>Do we collect any information from third parties?</strong> We do not collect any information from third parties.</p>
-            
-            <p><strong>How do we process your information?</strong> We process your information to provide, improve, and administer our Services, communicate with you, for security and fraud prevention, and to comply with law. We may also process your information for other purposes with your consent. We process your information only when we have a valid legal reason to do so. Learn more about how we process your information.</p>
-            
-            <p><strong>In what situations and with which parties do we share personal information?</strong> We may share information in specific situations and with specific third parties. Learn more about when and with whom we share your personal information.</p>
-            
-            <p><strong>How do we keep your information safe?</strong> We have adequate organizational and technical processes and procedures in place to protect your personal information. However, no electronic transmission over the internet or information storage technology can be guaranteed to be 100% secure, so we cannot promise or guarantee that hackers, cybercriminals, or other unauthorized third parties will not be able to defeat our security and improperly collect, access, steal, or modify your information. Learn more about how we keep your information safe.</p>
-            
-            <p><strong>What are your rights?</strong> Depending on where you are located geographically, the applicable privacy law may mean you have certain rights regarding your personal information. Learn more about your privacy rights.</p>
-            
-            <p><strong>How do you exercise your rights?</strong> The easiest way to exercise your rights is by submitting a data subject access request, or by contacting us. We will consider and act upon any request in accordance with applicable data protection laws.</p>
-        </div>
-    `;
-    popupBody.contentEditable = false;
-    document.getElementById('popupOverlay').style.display = "flex";
+
+/* ------------------------------------------------------------
+   IFRAME WRITING
+------------------------------------------------------------ */
+
+function writeHTMLToZoneFrame(html) {
+    const frameDocument =
+        zoneFrame.contentDocument ||
+        zoneFrame.contentWindow
+            ?.document;
+
+    if (!frameDocument) {
+        throw new Error(
+            "Unable to access the game frame."
+        );
+    }
+
+    frameDocument.open();
+
+    frameDocument.write(
+        html
+    );
+
+    frameDocument.close();
 }
 
-function loadDMCA() {
-    document.getElementById('popupTitle').textContent = "DMCA";
-    const popupBody = document.getElementById('popupBody');
-    popupBody.innerHTML = `
-        <div class="dmca-content">
-            <p>
-                If you own or developed a game that is on <strong>gn-math</strong> 
-                and would like it removed, please do one of the following:
-            </p>
-            <ol>
-                <li>
-                    <a href="https://discord.gg/D4c9VFYWyU" target="_blank" rel="noopener noreferrer">
-                        Join the Discord
-                    </a> and DM <strong>breadbb</strong> or ping me in a public channel 
-                    <strong>[INSTANT RESPONSE]</strong>
-                </li>
-                <li>
-                    Email me at 
-                    <a href="mailto:gn.math.business@gmail.com">gn.math.business@gmail.com</a> 
-                    with the subject starting with <code>!DMCA</code>.
-                    <strong>[DELAYED RESPONSE]</strong>
-                </li>
-            </ol>
-            <p>
-                If you are going to do an email, please show proof you own the game before I have to ask.
-            </p>
-        </div>
-    `;
-    popupBody.contentEditable = false;
-    document.getElementById('popupOverlay').style.display = "flex";
+
+/* ------------------------------------------------------------
+   OPEN ZONE
+------------------------------------------------------------ */
+
+async function openZone(
+    file,
+    options = {}
+) {
+    if (!file) {
+        return;
+    }
+
+    const {
+        updateHistory = true,
+        embed = false
+    } = options;
+
+    const rawURL =
+        String(file.url || "");
+
+    if (!rawURL) {
+        showToast(
+            "This zone does not have a URL."
+        );
+
+        return;
+    }
+
+    /*
+        Some entries intentionally point directly to external sites.
+    */
+
+    if (
+        /^https?:\/\//i.test(
+            rawURL
+        )
+    ) {
+        window.open(
+            rawURL,
+            "_blank",
+            "noopener,noreferrer"
+        );
+
+        return;
+    }
+
+    const url =
+        zoneURL(rawURL);
+
+    if (!url) {
+        showToast(
+            "Unable to resolve this zone."
+        );
+
+        return;
+    }
+
+    currentZone = file;
+
+    if (embed) {
+        document.body.classList.add(
+            "embed-mode"
+        );
+    } else {
+        document.body.classList.remove(
+            "embed-mode"
+        );
+    }
+
+    document.getElementById(
+        "zoneName"
+    ).textContent =
+        String(
+            file.name ||
+            "Zone"
+        );
+
+    document.getElementById(
+        "zoneId"
+    ).textContent =
+        String(
+            file.id ??
+            ""
+        );
+
+    const author =
+        document.getElementById(
+            "zoneAuthor"
+        );
+
+    author.textContent =
+        file.author
+            ? `by ${file.author}`
+            : "GN-Shrub";
+
+    const authorHref =
+        safeExternalHref(
+            file.authorLink
+        );
+
+    if (authorHref) {
+        author.href =
+            authorHref;
+
+        author.style.pointerEvents =
+            "";
+    } else {
+        author.removeAttribute(
+            "href"
+        );
+
+        author.style.pointerEvents =
+            "none";
+    }
+
+    zoneViewer.hidden = false;
+
+    zoneViewer.style.display =
+        "flex";
+
+    zoneViewer.setAttribute(
+        "aria-hidden",
+        "false"
+    );
+
+    document.body.classList.add(
+        "viewer-open"
+    );
+
+    zoneFrame.src =
+        "about:blank";
+
+    setLoadStatus(
+        `Opening ${file.name}...`
+    );
+
+    try {
+        const html =
+            await fetchTextChecked(
+                cacheBust(url)
+            );
+
+        const fixedHTML =
+            injectZoneBase(
+                html,
+                url
+            );
+
+        writeHTMLToZoneFrame(
+            fixedHTML
+        );
+
+        setLoadStatus(
+            `${zones.length.toLocaleString()} zones loaded`
+        );
+
+        if (
+            updateHistory &&
+            file.id != null
+        ) {
+            const pageURL =
+                new URL(
+                    window.location.href
+                );
+
+            pageURL.searchParams.set(
+                "id",
+                String(file.id)
+            );
+
+            history.pushState(
+                {
+                    zoneId:
+                        String(file.id)
+                },
+                "",
+                pageURL
+            );
+        }
+    } catch (error) {
+        console.error(
+            "Failed to load zone:",
+            error
+        );
+
+        closeZone({
+            updateHistory: false
+        });
+
+        showToast(
+            `Failed to load ${file.name}: ${error.message}`,
+            4200
+        );
+    }
 }
+
+
+/* ------------------------------------------------------------
+   URL ROUTING
+------------------------------------------------------------ */
+
+async function openZoneFromCurrentURL() {
+    if (
+        !zones.length ||
+        routeIsBeingHandled
+    ) {
+        return;
+    }
+
+    const search =
+        new URLSearchParams(
+            window.location.search
+        );
+
+    const id =
+        search.get("id");
+
+    if (!id) {
+        return;
+    }
+
+    const zone =
+        zones.find(
+            item =>
+                String(item.id) ===
+                String(id)
+        );
+
+    if (!zone) {
+        return;
+    }
+
+    const embed =
+        window.location.hash
+            .toLowerCase()
+            .includes("embed");
+
+    routeIsBeingHandled = true;
+
+    try {
+        await openZone(
+            zone,
+            {
+                updateHistory:
+                    false,
+                embed
+            }
+        );
+    } finally {
+        routeIsBeingHandled = false;
+    }
+}
+
+
+window.addEventListener(
+    "popstate",
+    async () => {
+        const search =
+            new URLSearchParams(
+                window.location.search
+            );
+
+        const id =
+            search.get("id");
+
+        if (!id) {
+            closeZone({
+                updateHistory: false
+            });
+
+            return;
+        }
+
+        const zone =
+            zones.find(
+                item =>
+                    String(item.id) ===
+                    String(id)
+            );
+
+        if (!zone) {
+            return;
+        }
+
+        await openZone(
+            zone,
+            {
+                updateHistory:
+                    false,
+                embed:
+                    window.location.hash
+                        .includes(
+                            "embed"
+                        )
+            }
+        );
+    }
+);
+
+
+/* ------------------------------------------------------------
+   CLOSE ZONE
+------------------------------------------------------------ */
+
+function closeZone(
+    options = {}
+) {
+    const {
+        updateHistory = true
+    } = options;
+
+    currentZone = null;
+
+    zoneViewer.hidden = true;
+
+    zoneViewer.style.display =
+        "none";
+
+    zoneViewer.setAttribute(
+        "aria-hidden",
+        "true"
+    );
+
+    document.body.classList.remove(
+        "viewer-open",
+        "embed-mode"
+    );
+
+    /*
+        Resetting the iframe stops audio, timers and games that
+        would otherwise keep running invisibly after closing.
+    */
+
+    zoneFrame.src =
+        "about:blank";
+
+    if (updateHistory) {
+        const pageURL =
+            new URL(
+                window.location.href
+            );
+
+        pageURL.searchParams.delete(
+            "id"
+        );
+
+        pageURL.hash = "";
+
+        history.pushState(
+            {},
+            "",
+            pageURL
+        );
+    }
+}
+
+
+/* ------------------------------------------------------------
+   NEW TAB
+------------------------------------------------------------ */
+
+async function aboutBlank() {
+    if (!currentZone) {
+        showToast(
+            "No zone is open."
+        );
+
+        return;
+    }
+
+    const rawURL =
+        String(
+            currentZone.url ||
+            ""
+        );
+
+    if (
+        /^https?:\/\//i.test(
+            rawURL
+        )
+    ) {
+        window.open(
+            rawURL,
+            "_blank",
+            "noopener,noreferrer"
+        );
+
+        return;
+    }
+
+    /*
+        Open immediately so browsers do not block the popup after
+        the asynchronous fetch finishes.
+    */
+
+    const newWindow =
+        window.open(
+            "about:blank",
+            "_blank"
+        );
+
+    if (!newWindow) {
+        showToast(
+            "Your browser blocked the new tab."
+        );
+
+        return;
+    }
+
+    try {
+        newWindow.document.title =
+            "Loading GN-Shrub...";
+
+        newWindow.document.body.innerHTML =
+            "<p style='font-family:system-ui;padding:20px'>Loading...</p>";
+
+        const url =
+            zoneURL(
+                currentZone.url
+            );
+
+        const html =
+            await fetchTextChecked(
+                cacheBust(url)
+            );
+
+        const fixedHTML =
+            injectZoneBase(
+                html,
+                url
+            );
+
+        newWindow.document.open();
+
+        newWindow.document.write(
+            fixedHTML
+        );
+
+        newWindow.document.close();
+    } catch (error) {
+        console.error(
+            "Failed to open zone in new tab:",
+            error
+        );
+
+        newWindow.document.open();
+
+        newWindow.document.write(
+            `<p style="font-family:system-ui;padding:20px">
+                Failed to load this zone.
+            </p>`
+        );
+
+        newWindow.document.close();
+    }
+}
+
+
+/* ------------------------------------------------------------
+   DOWNLOAD
+------------------------------------------------------------ */
+
+async function downloadZone() {
+    if (!currentZone) {
+        showToast(
+            "No zone is open."
+        );
+
+        return;
+    }
+
+    const rawURL =
+        String(
+            currentZone.url ||
+            ""
+        );
+
+    if (
+        /^https?:\/\//i.test(
+            rawURL
+        )
+    ) {
+        showToast(
+            "This zone is an external URL and cannot be exported as a local HTML file."
+        );
+
+        return;
+    }
+
+    try {
+        const url =
+            zoneURL(
+                rawURL
+            );
+
+        const text =
+            await fetchTextChecked(
+                cacheBust(url)
+            );
+
+        /*
+            Include the corrected base URL in downloaded copies too,
+            so relative game files still have a chance to resolve.
+        */
+
+        const fixedText =
+            injectZoneBase(
+                text,
+                url
+            );
+
+        const blob =
+            new Blob(
+                [fixedText],
+                {
+                    type:
+                        "text/html;charset=utf-8"
+                }
+            );
+
+        const objectURL =
+            URL.createObjectURL(
+                blob
+            );
+
+        const link =
+            document.createElement(
+                "a"
+            );
+
+        link.href =
+            objectURL;
+
+        link.download =
+            `${safeFileName(
+                currentZone.name
+            )}.html`;
+
+        document.body.appendChild(
+            link
+        );
+
+        link.click();
+
+        link.remove();
+
+        setTimeout(
+            () =>
+                URL.revokeObjectURL(
+                    objectURL
+                ),
+            1000
+        );
+    } catch (error) {
+        console.error(
+            "Download failed:",
+            error
+        );
+
+        showToast(
+            `Download failed: ${error.message}`,
+            3500
+        );
+    }
+}
+
+
+/* ------------------------------------------------------------
+   FULLSCREEN
+------------------------------------------------------------ */
+
+async function fullscreenZone() {
+    try {
+        if (
+            document.fullscreenElement
+        ) {
+            await document.exitFullscreen();
+
+            return;
+        }
+
+        if (
+            zoneFrame.requestFullscreen
+        ) {
+            await zoneFrame.requestFullscreen();
+        }
+
+        else if (
+            zoneFrame.webkitRequestFullscreen
+        ) {
+            zoneFrame.webkitRequestFullscreen();
+        }
+
+        else {
+            showToast(
+                "Fullscreen is not supported by this browser."
+            );
+        }
+    } catch (error) {
+        console.error(
+            "Fullscreen failed:",
+            error
+        );
+
+        showToast(
+            "Unable to enter fullscreen."
+        );
+    }
+}
+
+
+/* ------------------------------------------------------------
+   POPUP
+------------------------------------------------------------ */
+
+function openPopup(
+    title,
+    html
+) {
+    popupTitle.textContent =
+        title;
+
+    popupBody.innerHTML =
+        html;
+
+    popupOverlay.style.display =
+        "flex";
+
+    popupOverlay.setAttribute(
+        "aria-hidden",
+        "false"
+    );
+}
+
 
 function closePopup() {
-    document.getElementById('popupOverlay').style.display = "none";
-}
-listZones();
+    popupOverlay.style.display =
+        "none";
 
-const schoolList = ["deledao", "goguardian", "lightspeed", "linewize", "securly", ".edu/"];
-
-function isBlockedDomain(url) {
-    const domain = new URL(url, location.origin).hostname + "/";
-    return schoolList.some(school => domain.includes(school));
+    popupOverlay.setAttribute(
+        "aria-hidden",
+        "true"
+    );
 }
 
-const originalFetch = window.fetch;
-window.fetch = function (url, options) {
-    if (isBlockedDomain(url)) {
-        console.warn(`lam`);
-        return Promise.reject(new Error("lam"));
+
+popupOverlay.addEventListener(
+    "click",
+    event => {
+        if (
+            event.target ===
+            popupOverlay
+        ) {
+            closePopup();
+        }
     }
-    return originalFetch.apply(this, arguments);
-};
+);
 
-const originalOpen = XMLHttpRequest.prototype.open;
-XMLHttpRequest.prototype.open = function (method, url) {
-    if (isBlockedDomain(url)) {
-        console.warn(`lam`);
+
+/* ------------------------------------------------------------
+   SETTINGS
+------------------------------------------------------------ */
+
+settingsButton.addEventListener(
+    "click",
+    () => {
+        openPopup(
+            "Settings",
+            `
+                <button
+                    class="settings-button"
+                    type="button"
+                    onclick="tabCloak()"
+                >
+                    Tab Cloak
+                </button>
+
+                <br><br>
+
+                <button
+                    class="settings-button secondary"
+                    type="button"
+                    onclick="resetTabCloak()"
+                >
+                    Reset Tab Appearance
+                </button>
+
+                <p style="
+                    margin: 1rem 0 0;
+                    font-size: .82rem;
+                    color: var(--text-muted);
+                ">
+                    GN-Shrub stays in dark mode.
+                </p>
+            `
+        );
+    }
+);
+
+
+/* ------------------------------------------------------------
+   TAB CLOAK
+------------------------------------------------------------ */
+
+function cloakName(value) {
+    const title =
+        String(value || "")
+            .trim();
+
+    document.title =
+        title ||
+        "GN-Shrub";
+
+    if (title) {
+        localStorage.setItem(
+            "gnshrub-tab-title",
+            title
+        );
+    } else {
+        localStorage.removeItem(
+            "gnshrub-tab-title"
+        );
+    }
+}
+
+
+function cloakIcon(value) {
+    const icon =
+        String(value || "")
+            .trim();
+
+    let link =
+        document.querySelector(
+            "link[rel~='icon']"
+        );
+
+    if (!link) {
+        link =
+            document.createElement(
+                "link"
+            );
+
+        link.rel =
+            "icon";
+
+        document.head.appendChild(
+            link
+        );
+    }
+
+    link.href =
+        icon ||
+        "favicon.png";
+
+    if (icon) {
+        localStorage.setItem(
+            "gnshrub-tab-icon",
+            icon
+        );
+    } else {
+        localStorage.removeItem(
+            "gnshrub-tab-icon"
+        );
+    }
+}
+
+
+function tabCloak() {
+    const currentTitle =
+        localStorage.getItem(
+            "gnshrub-tab-title"
+        ) || "";
+
+    const currentIcon =
+        localStorage.getItem(
+            "gnshrub-tab-icon"
+        ) || "";
+
+    openPopup(
+        "Tab Cloak",
+        `
+            <label class="popup-field">
+                <span>Tab Title</span>
+
+                <input
+                    type="text"
+                    id="cloak-title-input"
+                    value="${escapeHTML(currentTitle)}"
+                    placeholder="Enter a new tab title..."
+                >
+            </label>
+
+            <label class="popup-field">
+                <span>Tab Icon URL</span>
+
+                <input
+                    type="url"
+                    id="cloak-icon-input"
+                    value="${escapeHTML(currentIcon)}"
+                    placeholder="https://example.com/icon.png"
+                >
+            </label>
+
+            <button
+                class="settings-button"
+                type="button"
+                id="save-cloak-button"
+            >
+                Save
+            </button>
+        `
+    );
+
+    document
+        .getElementById(
+            "save-cloak-button"
+        )
+        .addEventListener(
+            "click",
+            () => {
+                cloakName(
+                    document.getElementById(
+                        "cloak-title-input"
+                    ).value
+                );
+
+                cloakIcon(
+                    document.getElementById(
+                        "cloak-icon-input"
+                    ).value
+                );
+
+                closePopup();
+
+                showToast(
+                    "Tab appearance updated."
+                );
+            }
+        );
+}
+
+
+function resetTabCloak() {
+    localStorage.removeItem(
+        "gnshrub-tab-title"
+    );
+
+    localStorage.removeItem(
+        "gnshrub-tab-icon"
+    );
+
+    document.title =
+        "GN-Shrub";
+
+    cloakIcon("");
+
+    closePopup();
+
+    showToast(
+        "Tab appearance reset."
+    );
+}
+
+
+function restoreTabCloak() {
+    const title =
+        localStorage.getItem(
+            "gnshrub-tab-title"
+        );
+
+    const icon =
+        localStorage.getItem(
+            "gnshrub-tab-icon"
+        );
+
+    if (title) {
+        document.title =
+            title;
+    }
+
+    if (icon) {
+        cloakIcon(icon);
+    }
+}
+
+
+/* ------------------------------------------------------------
+   CONTACT / INFO
+------------------------------------------------------------ */
+
+function showContact() {
+    openPopup(
+        "Contact",
+        `
+            <h3>GN-Shrub</h3>
+
+            <p>
+                GN-Shrub is hosted at:
+            </p>
+
+            <p>
+                <a
+                    href="https://zoinkdoggie94.github.io/gn/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    zoinkdoggie94.github.io/gn/
+                </a>
+            </p>
+        `
+    );
+}
+
+
+function loadDMCA() {
+    openPopup(
+        "DMCA",
+        `
+            <div class="dmca-content">
+
+                <h3>Content Removal</h3>
+
+                <p>
+                    GN-Shrub acts as a frontend for game entries
+                    loaded from third-party sources.
+                </p>
+
+                <p>
+                    If you own content displayed through GN-Shrub
+                    and want the GN-Shrub site to stop listing it,
+                    contact the maintainer of this site with the
+                    game name and proof of ownership.
+                </p>
+
+            </div>
+        `
+    );
+}
+
+
+function loadPrivacy() {
+    openPopup(
+        "Privacy",
+        `
+            <div>
+
+                <h2>GN-Shrub Privacy</h2>
+
+                <p>
+                    GN-Shrub itself does not require an account.
+                </p>
+
+                <p>
+                    Search settings, tab appearance settings and
+                    imported GN-Shrub settings may be stored locally
+                    in your browser.
+                </p>
+
+                <p>
+                    Games and other resources can be loaded from
+                    third-party services. Those services may have
+                    their own privacy policies and network logging.
+                </p>
+
+                <p>
+                    The Export Data button exports GN-Shrub's
+                    browser storage settings. It does not intentionally
+                    export your browser cookies.
+                </p>
+
+            </div>
+        `
+    );
+}
+
+
+/* ------------------------------------------------------------
+   DATA EXPORT
+
+   Safer than the old implementation:
+   - no cookie dumping
+   - no arbitrary Cache Storage dumping
+   - no whole IndexedDB database dumping
+
+   It only exports GN-Shrub's local and session storage.
+------------------------------------------------------------ */
+
+function storageToObject(
+    storage
+) {
+    const result = {};
+
+    for (
+        let index = 0;
+        index < storage.length;
+        index++
+    ) {
+        const key =
+            storage.key(index);
+
+        if (key == null) {
+            continue;
+        }
+
+        result[key] =
+            storage.getItem(key);
+    }
+
+    return result;
+}
+
+
+async function saveData() {
+    try {
+        const result = {
+            application:
+                "GN-Shrub",
+
+            version:
+                1,
+
+            exportedAt:
+                new Date()
+                    .toISOString(),
+
+            localStorage:
+                storageToObject(
+                    localStorage
+                ),
+
+            sessionStorage:
+                storageToObject(
+                    sessionStorage
+                )
+        };
+
+        const blob =
+            new Blob(
+                [
+                    JSON.stringify(
+                        result,
+                        null,
+                        2
+                    )
+                ],
+                {
+                    type:
+                        "application/json"
+                }
+            );
+
+        const url =
+            URL.createObjectURL(
+                blob
+            );
+
+        const link =
+            document.createElement(
+                "a"
+            );
+
+        link.href =
+            url;
+
+        link.download =
+            `gn-shrub-data-${Date.now()}.json`;
+
+        document.body.appendChild(
+            link
+        );
+
+        link.click();
+
+        link.remove();
+
+        setTimeout(
+            () =>
+                URL.revokeObjectURL(
+                    url
+                ),
+            1000
+        );
+
+        showToast(
+            "GN-Shrub data exported."
+        );
+    } catch (error) {
+        console.error(
+            "Export failed:",
+            error
+        );
+
+        showToast(
+            "Unable to export data."
+        );
+    }
+}
+
+
+/* ------------------------------------------------------------
+   DATA IMPORT
+------------------------------------------------------------ */
+
+function restoreStorageObject(
+    storage,
+    value
+) {
+    if (
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value)
+    ) {
         return;
     }
-    return originalOpen.apply(this, arguments);
-};
 
-HTMLCanvasElement.prototype.toDataURL = function (...args) {
-    return "";
-};
+    for (
+        const [
+            key,
+            itemValue
+        ]
+        of Object.entries(value)
+    ) {
+        if (
+            typeof key !==
+            "string"
+        ) {
+            continue;
+        }
+
+        storage.setItem(
+            key,
+            String(
+                itemValue ?? ""
+            )
+        );
+    }
+}
+
+
+async function loadData(event) {
+    const input =
+        event.target;
+
+    const file =
+        input.files?.[0];
+
+    if (!file) {
+        return;
+    }
+
+    try {
+        const text =
+            await file.text();
+
+        const data =
+            JSON.parse(text);
+
+        if (
+            !data ||
+            typeof data !== "object"
+        ) {
+            throw new Error(
+                "Invalid data file."
+            );
+        }
+
+        restoreStorageObject(
+            localStorage,
+            data.localStorage
+        );
+
+        restoreStorageObject(
+            sessionStorage,
+            data.sessionStorage
+        );
+
+        restoreTabCloak();
+
+        showToast(
+            "GN-Shrub data imported."
+        );
+    } catch (error) {
+        console.error(
+            "Import failed:",
+            error
+        );
+
+        showToast(
+            "That file could not be imported."
+        );
+    } finally {
+        input.value = "";
+    }
+}
+
+
+/* ------------------------------------------------------------
+   DARK MODE
+
+   GN-Shrub intentionally stays dark.
+------------------------------------------------------------ */
+
+function darkMode() {
+    document.body.classList.add(
+        "dark-mode"
+    );
+}
+
+
+/* ------------------------------------------------------------
+   KEYBOARD CONTROLS
+------------------------------------------------------------ */
+
+document.addEventListener(
+    "keydown",
+    event => {
+        if (
+            event.key !==
+            "Escape"
+        ) {
+            return;
+        }
+
+        if (
+            popupOverlay.style
+                .display ===
+            "flex"
+        ) {
+            closePopup();
+
+            return;
+        }
+
+        if (
+            !zoneViewer.hidden
+        ) {
+            closeZone();
+        }
+    }
+);
+
+
+/* ------------------------------------------------------------
+   INITIALIZATION
+------------------------------------------------------------ */
+
+async function initializeGNshrub() {
+    document.body.classList.add(
+        "dark-mode"
+    );
+
+    restoreTabCloak();
+
+    const search =
+        new URLSearchParams(
+            window.location.search
+        );
+
+    if (
+        search.has(
+            "privacy"
+        )
+    ) {
+        loadPrivacy();
+    }
+
+    await listZones();
+}
+
+
+initializeGNshrub();
