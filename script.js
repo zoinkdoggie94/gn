@@ -13,14 +13,13 @@ const container = document.getElementById("container");
 const featuredContainer = document.getElementById("featuredZones");
 
 const zoneViewer = document.getElementById("zoneViewer");
-const zoneFrame = document.getElementById("zoneFrame");
+let zoneFrame = document.getElementById("zoneFrame");
 
 const searchBar = document.getElementById("searchBar");
 const sortOptions = document.getElementById("sortOptions");
 const filterOptions = document.getElementById("filterOptions");
 
 const refreshButton = document.getElementById("refresh");
-
 const settingsButton = document.getElementById("settings");
 
 const popupOverlay = document.getElementById("popupOverlay");
@@ -32,7 +31,7 @@ const toastElement = document.getElementById("toast");
 
 
 /* ------------------------------------------------------------
-   VERIFIED GN-MATH MIRROR SOURCES
+   GN-MATH MIRROR SOURCES
 ------------------------------------------------------------ */
 
 const zonesURL =
@@ -47,9 +46,7 @@ const coverURL =
 
 /*
     Popularity is optional.
-
-    If this endpoint ever fails, GN-Shrub still works normally.
-    Only the "Popular" ordering loses its hit-count information.
+    If this fails, the site still works.
 */
 
 const popularityURL =
@@ -68,23 +65,26 @@ let currentZone = null;
 
 let zonesRequestController = null;
 
-let toastTimer = null;
+let zoneOpenController = null;
+
+let zoneOpenSequence = 0;
 
 let routeIsBeingHandled = false;
 
+let toastTimer = null;
+
 
 /* ------------------------------------------------------------
-   HELPERS
+   BASIC HELPERS
 ------------------------------------------------------------ */
 
 function toTitleCase(value) {
-    return String(value || "")
-        .replace(
-            /\w\S*/g,
-            word =>
-                word.charAt(0).toUpperCase() +
-                word.substring(1).toLowerCase()
-        );
+    return String(value || "").replace(
+        /\w\S*/g,
+        word =>
+            word.charAt(0).toUpperCase() +
+            word.slice(1).toLowerCase()
+    );
 }
 
 
@@ -96,11 +96,31 @@ function zoneURL(value) {
 
 
 function cacheBust(url) {
-    const parsed = new URL(url, window.location.href);
+    try {
+        const parsed = new URL(
+            url,
+            window.location.href
+        );
 
-    parsed.searchParams.set("_gnshrub", Date.now());
+        parsed.searchParams.set(
+            "_gnshrub",
+            Date.now()
+        );
 
-    return parsed.href;
+        return parsed.href;
+    } catch {
+        const separator =
+            String(url).includes("?")
+                ? "&"
+                : "?";
+
+        return (
+            String(url) +
+            separator +
+            "_gnshrub=" +
+            Date.now()
+        );
+    }
 }
 
 
@@ -109,24 +129,62 @@ function setLoadStatus(message) {
         return;
     }
 
-    loadStatus.textContent = message || "";
+    loadStatus.textContent =
+        String(message || "");
 }
 
 
-function showToast(message, timeout = 2400) {
+function showToast(
+    message,
+    timeout = 2400
+) {
     if (!toastElement) {
+        console.log(message);
         return;
     }
 
     clearTimeout(toastTimer);
 
-    toastElement.textContent = message;
+    toastElement.textContent =
+        String(message || "");
 
-    toastElement.classList.add("show");
+    toastElement.classList.add(
+        "show"
+    );
 
-    toastTimer = setTimeout(() => {
-        toastElement.classList.remove("show");
-    }, timeout);
+    toastTimer = setTimeout(
+        () => {
+            toastElement.classList.remove(
+                "show"
+            );
+        },
+        timeout
+    );
+}
+
+
+function escapeHTML(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+
+function safeFileName(value) {
+    const result =
+        String(value || "zone")
+            .replace(
+                /[<>:"/\\|?*\u0000-\u001F]/g,
+                "_"
+            )
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 120);
+
+    return result || "zone";
 }
 
 
@@ -136,7 +194,11 @@ function safeExternalHref(value) {
     }
 
     try {
-        const url = new URL(value, window.location.href);
+        const url =
+            new URL(
+                value,
+                window.location.href
+            );
 
         if (
             url.protocol !== "http:" &&
@@ -152,116 +214,22 @@ function safeExternalHref(value) {
 }
 
 
-function safeFileName(value) {
-    const result = String(value || "zone")
-        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 120);
-
-    return result || "zone";
-}
-
-
-function escapeHTML(value) {
-    return String(value ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
-
-
-/* ------------------------------------------------------------
-   GAME HTML BASE HANDLING
-
-   Games are fetched from jsDelivr and written into our iframe.
-
-   A <base> tag makes relative resources such as:
-       script.js
-       style.css
-       assets/file.png
-       Build/game.wasm
-
-   resolve against the actual game's CDN directory instead of
-   accidentally resolving against the GN-Shrub website.
------------------------------------------------------------- */
-
-function zoneBaseFor(url) {
-    try {
-        return new URL(".", url).href;
-    } catch {
-        return url;
-    }
-}
-
-
-function injectZoneBase(html, url) {
-    const baseURL = zoneBaseFor(url);
-
-    const safeBase =
-        String(baseURL)
-            .replace(/&/g, "&amp;")
-            .replace(/"/g, "&quot;");
-
-    const baseTag =
-        `<base href="${safeBase}">`;
-
-    const existingBase =
-        /<base\b[^>]*>/i;
-
-    if (existingBase.test(html)) {
-        return html.replace(
-            existingBase,
-            baseTag
-        );
-    }
-
-    const headTag =
-        /<head\b[^>]*>/i;
-
-    if (headTag.test(html)) {
-        return html.replace(
-            headTag,
-            match =>
-                `${match}\n${baseTag}`
-        );
-    }
-
-    const htmlTag =
-        /<html\b[^>]*>/i;
-
-    if (htmlTag.test(html)) {
-        return html.replace(
-            htmlTag,
-            match =>
-                `${match}\n<head>${baseTag}</head>`
-        );
-    }
-
-    return (
-        `<!DOCTYPE html>` +
-        `<html>` +
-        `<head>${baseTag}</head>` +
-        `<body>${html}</body>` +
-        `</html>`
-    );
-}
-
-
 /* ------------------------------------------------------------
    FETCH HELPERS
 ------------------------------------------------------------ */
 
-async function fetchTextChecked(url, options = {}) {
-    const response = await fetch(
-        url,
-        {
-            cache: "no-store",
-            ...options
-        }
-    );
+async function fetchTextChecked(
+    url,
+    options = {}
+) {
+    const response =
+        await fetch(
+            url,
+            {
+                cache: "no-store",
+                ...options
+            }
+        );
 
     if (!response.ok) {
         throw new Error(
@@ -273,14 +241,18 @@ async function fetchTextChecked(url, options = {}) {
 }
 
 
-async function fetchJSONChecked(url, options = {}) {
-    const response = await fetch(
-        url,
-        {
-            cache: "no-store",
-            ...options
-        }
-    );
+async function fetchJSONChecked(
+    url,
+    options = {}
+) {
+    const response =
+        await fetch(
+            url,
+            {
+                cache: "no-store",
+                ...options
+            }
+        );
 
     if (!response.ok) {
         throw new Error(
@@ -292,9 +264,278 @@ async function fetchJSONChecked(url, options = {}) {
 }
 
 
+/* ============================================================
+   GAME HTML FIXING
+
+   This is the important white-screen fix.
+
+   Lots of GN-Math HTML launchers contain their OWN <base href>
+   that points to wherever that game's real CSS / JS / WASM /
+   images / Unity build actually live.
+
+   We MUST preserve and resolve that declared base instead of
+   replacing it with freebuisness/html@main/.
+   ============================================================ */
+
+const BASE_TAG_RE =
+    /<base\b[^>]*>/i;
+
+const BASE_HREF_RE =
+    /<base\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))[^>]*>/i;
+
+
 /* ------------------------------------------------------------
-   POPULARITY
+   REWRITE OLD DEAD GN-MATH CDN REFERENCES
 ------------------------------------------------------------ */
+
+function rewriteKnownMirrorURLs(html) {
+    let output =
+        String(html || "");
+
+    const replacements = [
+        [
+            /https:\/\/cdn\.jsdelivr\.net\/gh\/gn-math\/assets@(?:main|master|latest)/gi,
+            "https://cdn.jsdelivr.net/gh/freebuisness/assets@main"
+        ],
+
+        [
+            /https:\/\/cdn\.jsdelivr\.net\/gh\/gn-math\/html@(?:main|master|latest)/gi,
+            "https://cdn.jsdelivr.net/gh/freebuisness/html@main"
+        ],
+
+        [
+            /https:\/\/cdn\.jsdelivr\.net\/gh\/gn-math\/covers@(?:main|master|latest)/gi,
+            "https://cdn.jsdelivr.net/gh/freebuisness/covers@main"
+        ]
+    ];
+
+    for (
+        const [
+            pattern,
+            replacement
+        ]
+        of replacements
+    ) {
+        output =
+            output.replace(
+                pattern,
+                replacement
+            );
+    }
+
+    return output;
+}
+
+
+/* ------------------------------------------------------------
+   CLEAN WEIRD MIRRORED HTML
+------------------------------------------------------------ */
+
+function stripBrokenLeadingClosers(html) {
+    let output =
+        String(html || "");
+
+    /*
+        Some mirrored game HTML files start with:
+        </script><!DOCTYPE html>
+
+        An unmatched closing script tag before the document begins
+        is useless and can make document.write parsing less reliable.
+    */
+
+    output =
+        output.replace(
+            /^\uFEFF/,
+            ""
+        );
+
+    output =
+        output.replace(
+            /^\s*<\/script\s*>\s*(?=(?:<!doctype\s+html|<html\b|<head\b))/i,
+            ""
+        );
+
+    return output;
+}
+
+
+/* ------------------------------------------------------------
+   DETERMINE REAL GAME BASE
+------------------------------------------------------------ */
+
+function zoneBaseFor(
+    url,
+    html
+) {
+    const sourceURL =
+        String(url || "");
+
+    const slashIndex =
+        sourceURL.lastIndexOf("/");
+
+    const launcherFolder =
+        slashIndex >= 0
+            ? sourceURL.slice(
+                0,
+                slashIndex + 1
+            )
+            : sourceURL;
+
+    let root;
+
+    try {
+        root =
+            new URL(
+                launcherFolder,
+                document.baseURI
+            ).href;
+    } catch {
+        root =
+            launcherFolder;
+    }
+
+    /*
+        Check whether the GAME ITSELF declared a base.
+
+        Example:
+
+        <base href="https://some-other-repo/game/">
+
+        That URL is where its resources actually belong.
+    */
+
+    const match =
+        String(html || "")
+            .match(
+                BASE_HREF_RE
+            );
+
+    const declared =
+        match
+            ? (
+                match[1] !== undefined
+                    ? match[1]
+                    : match[2] !== undefined
+                        ? match[2]
+                        : match[3]
+            )
+            : "";
+
+    if (!declared) {
+        return root;
+    }
+
+    try {
+        return new URL(
+            declared,
+            root
+        ).href;
+    } catch {
+        return root;
+    }
+}
+
+
+/* ------------------------------------------------------------
+   INJECT / FIX BASE
+------------------------------------------------------------ */
+
+function injectZoneBase(
+    html,
+    url
+) {
+    let output =
+        stripBrokenLeadingClosers(
+            rewriteKnownMirrorURLs(
+                html
+            )
+        );
+
+    const baseURL =
+        zoneBaseFor(
+            url,
+            output
+        );
+
+    const safeBase =
+        String(baseURL)
+            .replace(
+                /&/g,
+                "&amp;"
+            )
+            .replace(
+                /"/g,
+                "&quot;"
+            );
+
+    const baseTag =
+        `<base href="${safeBase}">`;
+
+    /*
+        If the document already has <base>, keep its meaning,
+        but make the resolved value absolute and reliable.
+    */
+
+    if (
+        BASE_TAG_RE.test(
+            output
+        )
+    ) {
+        return output.replace(
+            BASE_TAG_RE,
+            baseTag
+        );
+    }
+
+    /*
+        Otherwise add a base pointing to the launcher directory.
+    */
+
+    if (
+        /<head\b[^>]*>/i.test(
+            output
+        )
+    ) {
+        return output.replace(
+            /<head\b[^>]*>/i,
+            match =>
+                `${match}\n${baseTag}`
+        );
+    }
+
+    if (
+        /<html\b[^>]*>/i.test(
+            output
+        )
+    ) {
+        return output.replace(
+            /<html\b[^>]*>/i,
+            match =>
+                `${match}\n<head>${baseTag}</head>`
+        );
+    }
+
+    return (
+        `${baseTag}\n` +
+        output
+    );
+}
+
+
+function prepareGameHTML(
+    html,
+    url
+) {
+    return injectZoneBase(
+        html,
+        url
+    );
+}
+
+
+/* ============================================================
+   POPULARITY
+   ============================================================ */
 
 async function fetchPopularity() {
     popularityData = {};
@@ -305,13 +546,21 @@ async function fetchPopularity() {
                 popularityURL
             );
 
-        if (!Array.isArray(data)) {
+        if (
+            !Array.isArray(data)
+        ) {
             return;
         }
 
-        for (const file of data) {
+        for (
+            const file
+            of data
+        ) {
             const name =
-                String(file?.name || "");
+                String(
+                    file?.name ||
+                    ""
+                );
 
             const idMatch =
                 name.match(
@@ -323,7 +572,9 @@ async function fetchPopularity() {
             }
 
             const id =
-                Number(idMatch[1]);
+                Number(
+                    idMatch[1]
+                );
 
             const hits =
                 Number(
@@ -336,15 +587,13 @@ async function fetchPopularity() {
                 Number.isFinite(id) &&
                 Number.isFinite(hits)
             ) {
-                popularityData[id] = hits;
+                popularityData[id] =
+                    hits;
             }
         }
     } catch (error) {
         /*
-            Popularity is intentionally non-critical.
-
-            Do not prevent the entire site from loading just because
-            jsDelivr's statistics endpoint is temporarily unavailable.
+            This should NEVER break game loading.
         */
 
         console.warn(
@@ -355,12 +604,18 @@ async function fetchPopularity() {
 }
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    LOAD ZONES
------------------------------------------------------------- */
+   ============================================================ */
 
 async function listZones() {
-    if (zonesRequestController) {
+    /*
+        Cancel an older refresh if another refresh starts.
+    */
+
+    if (
+        zonesRequestController
+    ) {
         zonesRequestController.abort();
     }
 
@@ -370,12 +625,13 @@ async function listZones() {
     const signal =
         zonesRequestController.signal;
 
-    refreshButton?.classList.add(
-        "is-loading"
-    );
-
     if (refreshButton) {
-        refreshButton.disabled = true;
+        refreshButton.classList.add(
+            "is-loading"
+        );
+
+        refreshButton.disabled =
+            true;
     }
 
     setLoadStatus(
@@ -388,16 +644,27 @@ async function listZones() {
     }
 
     try {
+        /*
+            Popularity can happen in parallel.
+            It is optional.
+        */
+
         const popularityPromise =
             fetchPopularity();
 
         const json =
             await fetchJSONChecked(
-                cacheBust(zonesURL),
-                { signal }
+                cacheBust(
+                    zonesURL
+                ),
+                {
+                    signal
+                }
             );
 
-        if (!Array.isArray(json)) {
+        if (
+            !Array.isArray(json)
+        ) {
             throw new Error(
                 "zones.json did not return an array."
             );
@@ -407,32 +674,32 @@ async function listZones() {
             json.filter(
                 zone =>
                     zone &&
-                    typeof zone === "object" &&
+                    typeof zone ===
+                        "object" &&
                     zone.name != null &&
                     zone.url != null
             );
 
-        if (zones.length) {
-            /*
-                GN-Math traditionally keeps its first special entry
-                featured. Preserve that behavior.
-            */
+        /*
+            Preserve GN-Math's first-entry featured behavior.
+        */
 
-            zones[0].featured = true;
+        if (zones.length) {
+            zones[0].featured =
+                true;
         }
 
         await popularityPromise;
 
         buildTagOptions();
 
-        sortZones();
+        renderZones();
 
         setLoadStatus(
             `${zones.length.toLocaleString()} zones loaded`
         );
 
         await openZoneFromCurrentURL();
-
     } catch (error) {
         if (
             error?.name ===
@@ -457,38 +724,57 @@ async function listZones() {
             </div>
         `;
     } finally {
-        refreshButton?.classList.remove(
-            "is-loading"
-        );
-
         if (refreshButton) {
-            refreshButton.disabled = false;
+            refreshButton.classList.remove(
+                "is-loading"
+            );
+
+            refreshButton.disabled =
+                false;
         }
     }
 }
 
 
-/* ------------------------------------------------------------
-   TAGS
------------------------------------------------------------- */
+/* ============================================================
+   TAG OPTIONS
+   ============================================================ */
 
 function buildTagOptions() {
+    if (!filterOptions) {
+        return;
+    }
+
     const previousValue =
         filterOptions.value;
 
-    const tags = new Set();
+    const tags =
+        new Set();
 
-    for (const zone of zones) {
-        if (!Array.isArray(zone.special)) {
+    for (
+        const zone
+        of zones
+    ) {
+        if (
+            !Array.isArray(
+                zone.special
+            )
+        ) {
             continue;
         }
 
-        for (const tag of zone.special) {
+        for (
+            const tag
+            of zone.special
+        ) {
             if (
-                typeof tag === "string" &&
+                typeof tag ===
+                    "string" &&
                 tag.trim()
             ) {
-                tags.add(tag.trim());
+                tags.add(
+                    tag.trim()
+                );
             }
         }
     }
@@ -500,28 +786,42 @@ function buildTagOptions() {
                     b,
                     undefined,
                     {
-                        sensitivity: "base"
+                        sensitivity:
+                            "base"
                     }
                 )
         );
 
-    filterOptions.innerHTML = "";
+    filterOptions.innerHTML =
+        "";
 
     const allOption =
-        document.createElement("option");
+        document.createElement(
+            "option"
+        );
 
-    allOption.value = "none";
-    allOption.textContent = "Tag";
+    allOption.value =
+        "none";
+
+    allOption.textContent =
+        "Tag";
 
     filterOptions.appendChild(
         allOption
     );
 
-    for (const tag of sortedTags) {
+    for (
+        const tag
+        of sortedTags
+    ) {
         const option =
-            document.createElement("option");
+            document.createElement(
+                "option"
+            );
 
-        option.value = tag;
+        option.value =
+            tag;
+
         option.textContent =
             toTitleCase(tag);
 
@@ -530,47 +830,61 @@ function buildTagOptions() {
         );
     }
 
-    if (
+    const stillExists =
         [...filterOptions.options]
             .some(
                 option =>
                     option.value ===
                     previousValue
-            )
-    ) {
-        filterOptions.value =
-            previousValue;
-    }
+            );
+
+    filterOptions.value =
+        stillExists
+            ? previousValue
+            : "none";
 }
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    SORTING
------------------------------------------------------------- */
+   ============================================================ */
 
 function sortZoneList(list) {
     const sorted =
         [...list];
 
     const sortBy =
-        sortOptions.value;
+        sortOptions?.value ||
+        "name";
 
-    if (sortBy === "id") {
+    if (
+        sortBy ===
+        "id"
+    ) {
         sorted.sort(
             (a, b) =>
-                Number(b.id || 0) -
-                Number(a.id || 0)
+                Number(
+                    b.id || 0
+                ) -
+                Number(
+                    a.id || 0
+                )
         );
     }
 
-    else if (sortBy === "popular") {
+    else if (
+        sortBy ===
+        "popular"
+    ) {
         sorted.sort(
             (a, b) => {
                 const aPopularity =
                     Number(
                         a.popularity ??
                         popularityData[
-                            Number(a.id)
+                            Number(
+                                a.id
+                            )
                         ] ??
                         0
                     );
@@ -579,7 +893,9 @@ function sortZoneList(list) {
                     Number(
                         b.popularity ??
                         popularityData[
-                            Number(b.id)
+                            Number(
+                                b.id
+                            )
                         ] ??
                         0
                     );
@@ -595,8 +911,12 @@ function sortZoneList(list) {
                 }
 
                 return (
-                    Number(b.id || 0) -
-                    Number(a.id || 0)
+                    Number(
+                        b.id || 0
+                    ) -
+                    Number(
+                        a.id || 0
+                    )
                 );
             }
         );
@@ -605,10 +925,13 @@ function sortZoneList(list) {
     else {
         sorted.sort(
             (a, b) =>
-                String(a.name || "")
+                String(
+                    a.name || ""
+                )
                     .localeCompare(
                         String(
-                            b.name || ""
+                            b.name ||
+                            ""
                         ),
                         undefined,
                         {
@@ -620,16 +943,22 @@ function sortZoneList(list) {
     }
 
     /*
-        Preserve special -1 entries at the top.
+        Keep special -1 entries at the top.
     */
 
     sorted.sort(
         (a, b) => {
-            if (a.id === -1) {
+            if (
+                Number(a.id) ===
+                -1
+            ) {
                 return -1;
             }
 
-            if (b.id === -1) {
+            if (
+                Number(b.id) ===
+                -1
+            ) {
                 return 1;
             }
 
@@ -646,30 +975,45 @@ function sortZones() {
 }
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    FILTERING
------------------------------------------------------------- */
+   ============================================================ */
 
 function getFilteredZones() {
     const query =
-        searchBar.value
+        String(
+            searchBar?.value ||
+            ""
+        )
             .trim()
             .toLowerCase();
 
     const tag =
-        filterOptions.value;
+        filterOptions?.value ||
+        "none";
 
     return zones.filter(
         zone => {
             const name =
                 String(
-                    zone.name || ""
-                ).toLowerCase();
+                    zone.name ||
+                    ""
+                )
+                    .toLowerCase();
 
             const author =
                 String(
-                    zone.author || ""
-                ).toLowerCase();
+                    zone.author ||
+                    ""
+                )
+                    .toLowerCase();
+
+            const id =
+                String(
+                    zone.id ??
+                    ""
+                )
+                    .toLowerCase();
 
             const specials =
                 Array.isArray(
@@ -680,12 +1024,21 @@ function getFilteredZones() {
 
             const matchesSearch =
                 !query ||
-                name.includes(query) ||
-                author.includes(query);
+                name.includes(
+                    query
+                ) ||
+                author.includes(
+                    query
+                ) ||
+                id.includes(
+                    query
+                );
 
             const matchesTag =
                 tag === "none" ||
-                specials.includes(tag);
+                specials.includes(
+                    tag
+                );
 
             return (
                 matchesSearch &&
@@ -698,7 +1051,8 @@ function getFilteredZones() {
 
 function filterZones() {
     if (
-        searchBar.value.trim()
+        searchBar?.value
+            .trim()
     ) {
         document
             .getElementById(
@@ -715,7 +1069,7 @@ function filterZones() {
 
 function filterZones2() {
     if (
-        filterOptions.value !==
+        filterOptions?.value !==
         "none"
     ) {
         document
@@ -731,52 +1085,67 @@ function filterZones2() {
 }
 
 
-/* ------------------------------------------------------------
-   CARD CREATION
------------------------------------------------------------- */
+/* ============================================================
+   ZONE CARDS
+   ============================================================ */
 
 function createZoneCard(file) {
     const zoneItem =
-        document.createElement("article");
+        document.createElement(
+            "article"
+        );
 
     zoneItem.className =
         "zone-item";
 
-    zoneItem.tabIndex = 0;
+    zoneItem.tabIndex =
+        0;
 
     const image =
-        document.createElement("img");
+        document.createElement(
+            "img"
+        );
 
     image.alt =
-        String(file.name || "Zone");
+        String(
+            file.name ||
+            "Zone"
+        );
 
-    image.loading = "lazy";
+    image.loading =
+        "lazy";
 
-    image.decoding = "async";
+    image.decoding =
+        "async";
 
     image.referrerPolicy =
         "no-referrer";
 
     const resolvedCover =
-        zoneURL(
-            file.cover ||
-            "favicon.png"
-        );
+        file.cover
+            ? zoneURL(
+                file.cover
+            )
+            : "favicon.png";
 
     image.src =
         resolvedCover ||
         "favicon.png";
 
-    let fallbackUsed = false;
+    let fallbackUsed =
+        false;
 
     image.addEventListener(
         "error",
         () => {
-            if (fallbackUsed) {
+            if (
+                fallbackUsed
+            ) {
                 return;
             }
 
-            fallbackUsed = true;
+            fallbackUsed =
+                true;
 
             image.src =
                 "favicon.png";
@@ -788,7 +1157,8 @@ function createZoneCard(file) {
             "button"
         );
 
-    button.type = "button";
+    button.type =
+        "button";
 
     const title =
         document.createElement(
@@ -828,8 +1198,10 @@ function createZoneCard(file) {
         "keydown",
         event => {
             if (
-                event.key === "Enter" ||
-                event.key === " "
+                event.key ===
+                    "Enter" ||
+                event.key ===
+                    " "
             ) {
                 event.preventDefault();
 
@@ -847,27 +1219,38 @@ function createZoneCard(file) {
 }
 
 
-/* ------------------------------------------------------------
-   RENDER
------------------------------------------------------------- */
+/* ============================================================
+   RENDER FEATURED
+   ============================================================ */
 
 function displayFeaturedZones(
     featuredZones
 ) {
+    if (!featuredContainer) {
+        return;
+    }
+
     featuredContainer.innerHTML =
         "";
 
-    if (!featuredZones.length) {
+    if (
+        !featuredZones.length
+    ) {
         featuredContainer.innerHTML = `
             <div class="empty-message">
                 No featured zones found.
             </div>
         `;
 
-        document.getElementById(
-            "allZonesSummary"
-        ).textContent =
-            "Featured Zones";
+        const summary =
+            document.getElementById(
+                "allZonesSummary"
+            );
+
+        if (summary) {
+            summary.textContent =
+                "Featured Zones";
+        }
 
         return;
     }
@@ -880,7 +1263,9 @@ function displayFeaturedZones(
         of featuredZones
     ) {
         fragment.appendChild(
-            createZoneCard(file)
+            createZoneCard(
+                file
+            )
         );
     }
 
@@ -888,29 +1273,50 @@ function displayFeaturedZones(
         fragment
     );
 
-    document.getElementById(
-        "allZonesSummary"
-    ).textContent =
-        `Featured Zones (${featuredZones.length})`;
+    const summary =
+        document.getElementById(
+            "allZonesSummary"
+        );
+
+    if (summary) {
+        summary.textContent =
+            `Featured Zones (${featuredZones.length})`;
+    }
 }
 
+
+/* ============================================================
+   RENDER ALL
+   ============================================================ */
 
 function displayZones(
     displayedZones
 ) {
-    container.innerHTML = "";
+    if (!container) {
+        return;
+    }
 
-    if (!displayedZones.length) {
+    container.innerHTML =
+        "";
+
+    if (
+        !displayedZones.length
+    ) {
         container.innerHTML = `
             <div class="empty-message">
                 No zones match your search.
             </div>
         `;
 
-        document.getElementById(
-            "allSummary"
-        ).textContent =
-            "All Zones (0)";
+        const summary =
+            document.getElementById(
+                "allSummary"
+            );
+
+        if (summary) {
+            summary.textContent =
+                "All Zones (0)";
+        }
 
         return;
     }
@@ -923,7 +1329,9 @@ function displayZones(
         of displayedZones
     ) {
         fragment.appendChild(
-            createZoneCard(file)
+            createZoneCard(
+                file
+            )
         );
     }
 
@@ -931,10 +1339,15 @@ function displayZones(
         fragment
     );
 
-    document.getElementById(
-        "allSummary"
-    ).textContent =
-        `All Zones (${displayedZones.length})`;
+    const summary =
+        document.getElementById(
+            "allSummary"
+        );
+
+    if (summary) {
+        summary.textContent =
+            `All Zones (${displayedZones.length})`;
+    }
 }
 
 
@@ -943,15 +1356,21 @@ function renderZones() {
         getFilteredZones();
 
     const sorted =
-        sortZoneList(filtered);
+        sortZoneList(
+            filtered
+        );
 
-    displayZones(sorted);
+    displayZones(
+        sorted
+    );
 
     const featured =
         sortZoneList(
             zones.filter(
                 zone =>
-                    zone.featured
+                    Boolean(
+                        zone.featured
+                    )
             )
         );
 
@@ -961,14 +1380,71 @@ function renderZones() {
 }
 
 
-/* ------------------------------------------------------------
-   IFRAME WRITING
------------------------------------------------------------- */
+/* ============================================================
+   IFRAME MANAGEMENT
+   ============================================================ */
+
+function createFreshZoneFrame() {
+    const freshFrame =
+        document.createElement(
+            "iframe"
+        );
+
+    freshFrame.id =
+        "zoneFrame";
+
+    freshFrame.title =
+        "GN-Shrub game";
+
+    freshFrame.allow =
+        "autoplay; fullscreen; gamepad; pointer-lock; clipboard-read; clipboard-write";
+
+    freshFrame.allowFullscreen =
+        true;
+
+    freshFrame.setAttribute(
+        "allowfullscreen",
+        ""
+    );
+
+    /*
+        IMPORTANT:
+        Do NOT sandbox this iframe.
+        Many HTML5/Unity games need scripts, pointer lock,
+        storage and fullscreen.
+    */
+
+    if (
+        zoneFrame &&
+        zoneFrame.parentNode
+    ) {
+        zoneFrame.parentNode
+            .replaceChild(
+                freshFrame,
+                zoneFrame
+            );
+    }
+
+    else if (zoneViewer) {
+        zoneViewer.appendChild(
+            freshFrame
+        );
+    }
+
+    zoneFrame =
+        freshFrame;
+
+    return zoneFrame;
+}
+
 
 function writeHTMLToZoneFrame(html) {
+    const frame =
+        createFreshZoneFrame();
+
     const frameDocument =
-        zoneFrame.contentDocument ||
-        zoneFrame.contentWindow
+        frame.contentDocument ||
+        frame.contentWindow
             ?.document;
 
     if (!frameDocument) {
@@ -984,12 +1460,227 @@ function writeHTMLToZoneFrame(html) {
     );
 
     frameDocument.close();
+
+    return frame;
 }
 
 
-/* ------------------------------------------------------------
-   OPEN ZONE
------------------------------------------------------------- */
+/* ============================================================
+   VIEWER METADATA
+   ============================================================ */
+
+function showZoneViewer(
+    file,
+    embed = false
+) {
+    currentZone =
+        file;
+
+    if (embed) {
+        document.body.classList.add(
+            "embed-mode"
+        );
+    } else {
+        document.body.classList.remove(
+            "embed-mode"
+        );
+    }
+
+    const nameElement =
+        document.getElementById(
+            "zoneName"
+        );
+
+    const idElement =
+        document.getElementById(
+            "zoneId"
+        );
+
+    const authorElement =
+        document.getElementById(
+            "zoneAuthor"
+        );
+
+    if (nameElement) {
+        nameElement.textContent =
+            String(
+                file?.name ||
+                "Zone"
+            );
+    }
+
+    if (idElement) {
+        idElement.textContent =
+            String(
+                file?.id ??
+                ""
+            );
+    }
+
+    if (authorElement) {
+        authorElement.textContent =
+            file?.author
+                ? `by ${file.author}`
+                : "GN-Shrub";
+
+        const authorHref =
+            safeExternalHref(
+                file?.authorLink
+            );
+
+        if (authorHref) {
+            authorElement.href =
+                authorHref;
+
+            authorElement.style
+                .pointerEvents =
+                "";
+        } else {
+            authorElement.removeAttribute(
+                "href"
+            );
+
+            authorElement.style
+                .pointerEvents =
+                "none";
+        }
+    }
+
+    if (zoneViewer) {
+        zoneViewer.hidden =
+            false;
+
+        zoneViewer.style.display =
+            "flex";
+
+        zoneViewer.setAttribute(
+            "aria-hidden",
+            "false"
+        );
+    }
+
+    document.body.classList.add(
+        "viewer-open"
+    );
+}
+
+
+/* ============================================================
+   YOUTUBE PLAYABLES
+   ============================================================ */
+
+function looksLikeYouTubePlayable(html) {
+    const source =
+        String(html || "");
+
+    return (
+        /ytgame/i.test(
+            source
+        ) ||
+        /youtube\s*playables?/i.test(
+            source
+        )
+    );
+}
+
+
+function showYouTubePlayablePopup(
+    file,
+    html,
+    url
+) {
+    currentZone =
+        file;
+
+    openPopup(
+        String(
+            file?.name ||
+            "YouTube Playable"
+        ),
+        `
+            <p style="margin-top:0;">
+                This game is a YouTube Playables title and needs to open in its own tab.
+            </p>
+
+            <button
+                class="settings-button"
+                type="button"
+                id="ytOpenBtn"
+            >
+                Open in New Tab
+            </button>
+        `
+    );
+
+    const button =
+        document.getElementById(
+            "ytOpenBtn"
+        );
+
+    if (!button) {
+        return;
+    }
+
+    button.addEventListener(
+        "click",
+        () => {
+            const newWindow =
+                window.open(
+                    "about:blank",
+                    "_blank"
+                );
+
+            if (!newWindow) {
+                showToast(
+                    "Your browser blocked the new tab. Allow popups and try again.",
+                    3800
+                );
+
+                return;
+            }
+
+            try {
+                const prepared =
+                    prepareGameHTML(
+                        html,
+                        url
+                    );
+
+                newWindow.document.open();
+
+                newWindow.document.write(
+                    prepared
+                );
+
+                newWindow.document.close();
+
+                closePopup();
+            } catch (error) {
+                console.error(
+                    "Failed to open YouTube Playable:",
+                    error
+                );
+
+                try {
+                    newWindow.close();
+                } catch {}
+
+                showToast(
+                    `Failed to open ${file?.name || "game"}.`,
+                    3500
+                );
+            }
+        },
+        {
+            once: true
+        }
+    );
+}
+
+
+/* ============================================================
+   OPEN GAME
+   ============================================================ */
 
 async function openZone(
     file,
@@ -1005,7 +1696,11 @@ async function openZone(
     } = options;
 
     const rawURL =
-        String(file.url || "");
+        String(
+            file.url ||
+            ""
+        )
+            .trim();
 
     if (!rawURL) {
         showToast(
@@ -1016,7 +1711,8 @@ async function openZone(
     }
 
     /*
-        Some entries intentionally point directly to external sites.
+        GN-Math entries that use a completely external URL
+        intentionally open as separate sites.
     */
 
     if (
@@ -1024,8 +1720,21 @@ async function openZone(
             rawURL
         )
     ) {
+        const externalURL =
+            safeExternalHref(
+                rawURL
+            );
+
+        if (!externalURL) {
+            showToast(
+                "This zone has an invalid external URL."
+            );
+
+            return;
+        }
+
         window.open(
-            rawURL,
+            externalURL,
             "_blank",
             "noopener,noreferrer"
         );
@@ -1034,7 +1743,9 @@ async function openZone(
     }
 
     const url =
-        zoneURL(rawURL);
+        zoneURL(
+            rawURL
+        );
 
     if (!url) {
         showToast(
@@ -1044,99 +1755,131 @@ async function openZone(
         return;
     }
 
-    currentZone = file;
+    /*
+        Cancel a game that is still fetching if another game
+        gets clicked before it finishes.
+    */
 
-    if (embed) {
-        document.body.classList.add(
-            "embed-mode"
-        );
-    } else {
-        document.body.classList.remove(
-            "embed-mode"
-        );
+    if (
+        zoneOpenController
+    ) {
+        zoneOpenController.abort();
     }
 
-    document.getElementById(
-        "zoneName"
-    ).textContent =
-        String(
-            file.name ||
-            "Zone"
-        );
+    zoneOpenController =
+        new AbortController();
 
-    document.getElementById(
-        "zoneId"
-    ).textContent =
-        String(
-            file.id ??
-            ""
-        );
+    const signal =
+        zoneOpenController.signal;
 
-    const author =
-        document.getElementById(
-            "zoneAuthor"
-        );
+    const sequence =
+        ++zoneOpenSequence;
 
-    author.textContent =
-        file.author
-            ? `by ${file.author}`
-            : "GN-Shrub";
-
-    const authorHref =
-        safeExternalHref(
-            file.authorLink
-        );
-
-    if (authorHref) {
-        author.href =
-            authorHref;
-
-        author.style.pointerEvents =
-            "";
-    } else {
-        author.removeAttribute(
-            "href"
-        );
-
-        author.style.pointerEvents =
-            "none";
-    }
-
-    zoneViewer.hidden = false;
-
-    zoneViewer.style.display =
-        "flex";
-
-    zoneViewer.setAttribute(
-        "aria-hidden",
-        "false"
-    );
-
-    document.body.classList.add(
-        "viewer-open"
-    );
-
-    zoneFrame.src =
-        "about:blank";
+    currentZone =
+        file;
 
     setLoadStatus(
-        `Opening ${file.name}...`
+        `Opening ${file.name || "zone"}...`
     );
 
     try {
         const html =
             await fetchTextChecked(
-                cacheBust(url)
+                cacheBust(
+                    url
+                ),
+                {
+                    signal
+                }
             );
 
-        const fixedHTML =
-            injectZoneBase(
+        /*
+            A newer click happened while this one was downloading.
+        */
+
+        if (
+            sequence !==
+            zoneOpenSequence
+        ) {
+            return;
+        }
+
+        if (
+            !String(html || "")
+                .trim()
+        ) {
+            throw new Error(
+                "The game launcher returned an empty document."
+            );
+        }
+
+        /*
+            Detect common CDN error pages instead of pretending
+            they are game HTML.
+        */
+
+        if (
+            /couldn['’]?\s*find\s+the\s+requested\s+file/i.test(
+                html
+            ) ||
+            /package\s+size\s+exceeded/i.test(
+                html
+            )
+        ) {
+            throw new Error(
+                "The game launcher could not be loaded from the mirror."
+            );
+        }
+
+        /*
+            Some YouTube Playables do not behave correctly inside
+            the normal GN-Shrub iframe.
+        */
+
+        if (
+            looksLikeYouTubePlayable(
+                html
+            )
+        ) {
+            showYouTubePlayablePopup(
+                file,
                 html,
                 url
             );
 
+            setLoadStatus(
+                `${zones.length.toLocaleString()} zones loaded`
+            );
+
+            return;
+        }
+
+        /*
+            THIS fixes the white screen:
+            preserve the game's actual declared asset base.
+        */
+
+        const preparedHTML =
+            prepareGameHTML(
+                html,
+                url
+            );
+
+        /*
+            Update UI first.
+        */
+
+        showZoneViewer(
+            file,
+            embed
+        );
+
+        /*
+            Fresh iframe every time.
+        */
+
         writeHTMLToZoneFrame(
-            fixedHTML
+            preparedHTML
         );
 
         setLoadStatus(
@@ -1154,39 +1897,65 @@ async function openZone(
 
             pageURL.searchParams.set(
                 "id",
-                String(file.id)
+                String(
+                    file.id
+                )
             );
+
+            if (embed) {
+                pageURL.hash =
+                    "embed";
+            }
 
             history.pushState(
                 {
                     zoneId:
-                        String(file.id)
+                        String(
+                            file.id
+                        )
                 },
                 "",
                 pageURL
             );
         }
     } catch (error) {
+        if (
+            error?.name ===
+            "AbortError"
+        ) {
+            return;
+        }
+
         console.error(
             "Failed to load zone:",
             error
         );
 
-        closeZone({
-            updateHistory: false
-        });
+        if (
+            sequence ===
+            zoneOpenSequence
+        ) {
+            closeZone({
+                updateHistory:
+                    false
+            });
+        }
+
+        setLoadStatus(
+            `${zones.length.toLocaleString()} zones loaded`
+        );
 
         showToast(
-            `Failed to load ${file.name}: ${error.message}`,
-            4200
+            `Failed to load ${file.name || "zone"}: ${error.message}`,
+            4600
         );
     }
 }
 
 
-/* ------------------------------------------------------------
-   URL ROUTING
------------------------------------------------------------- */
+/* ============================================================
+   OPEN GAME FROM ?id=
+   ============================================================ */
 
 async function openZoneFromCurrentURL() {
     if (
@@ -1202,7 +1971,9 @@ async function openZoneFromCurrentURL() {
         );
 
     const id =
-        search.get("id");
+        search.get(
+            "id"
+        );
 
     if (!id) {
         return;
@@ -1211,8 +1982,12 @@ async function openZoneFromCurrentURL() {
     const zone =
         zones.find(
             item =>
-                String(item.id) ===
-                String(id)
+                String(
+                    item.id
+                ) ===
+                String(
+                    id
+                )
         );
 
     if (!zone) {
@@ -1222,9 +1997,12 @@ async function openZoneFromCurrentURL() {
     const embed =
         window.location.hash
             .toLowerCase()
-            .includes("embed");
+            .includes(
+                "embed"
+            );
 
-    routeIsBeingHandled = true;
+    routeIsBeingHandled =
+        true;
 
     try {
         await openZone(
@@ -1232,14 +2010,20 @@ async function openZoneFromCurrentURL() {
             {
                 updateHistory:
                     false,
+
                 embed
             }
         );
     } finally {
-        routeIsBeingHandled = false;
+        routeIsBeingHandled =
+            false;
     }
 }
 
+
+/* ============================================================
+   BROWSER BACK / FORWARD
+   ============================================================ */
 
 window.addEventListener(
     "popstate",
@@ -1250,11 +2034,14 @@ window.addEventListener(
             );
 
         const id =
-            search.get("id");
+            search.get(
+                "id"
+            );
 
         if (!id) {
             closeZone({
-                updateHistory: false
+                updateHistory:
+                    false
             });
 
             return;
@@ -1263,8 +2050,12 @@ window.addEventListener(
         const zone =
             zones.find(
                 item =>
-                    String(item.id) ===
-                    String(id)
+                    String(
+                        item.id
+                    ) ===
+                    String(
+                        id
+                    )
             );
 
         if (!zone) {
@@ -1276,8 +2067,10 @@ window.addEventListener(
             {
                 updateHistory:
                     false,
+
                 embed:
                     window.location.hash
+                        .toLowerCase()
                         .includes(
                             "embed"
                         )
@@ -1287,9 +2080,9 @@ window.addEventListener(
 );
 
 
-/* ------------------------------------------------------------
-   CLOSE ZONE
------------------------------------------------------------- */
+/* ============================================================
+   CLOSE GAME
+   ============================================================ */
 
 function closeZone(
     options = {}
@@ -1298,17 +2091,37 @@ function closeZone(
         updateHistory = true
     } = options;
 
-    currentZone = null;
+    if (
+        zoneOpenController
+    ) {
+        zoneOpenController.abort();
 
-    zoneViewer.hidden = true;
+        zoneOpenController =
+            null;
+    }
 
-    zoneViewer.style.display =
-        "none";
+    /*
+        Invalidate any previously-started async opener.
+    */
 
-    zoneViewer.setAttribute(
-        "aria-hidden",
-        "true"
-    );
+    zoneOpenSequence +=
+        1;
+
+    currentZone =
+        null;
+
+    if (zoneViewer) {
+        zoneViewer.hidden =
+            true;
+
+        zoneViewer.style.display =
+            "none";
+
+        zoneViewer.setAttribute(
+            "aria-hidden",
+            "true"
+        );
+    }
 
     document.body.classList.remove(
         "viewer-open",
@@ -1316,37 +2129,80 @@ function closeZone(
     );
 
     /*
-        Resetting the iframe stops audio, timers and games that
-        would otherwise keep running invisibly after closing.
+        Completely replace the iframe.
+
+        This kills:
+        - audio
+        - game loops
+        - web workers
+        - timers
+        - navigation state
+        - old game scripts
     */
 
-    zoneFrame.src =
-        "about:blank";
-
-    if (updateHistory) {
-        const pageURL =
-            new URL(
-                window.location.href
+    if (
+        zoneFrame &&
+        zoneFrame.parentNode
+    ) {
+        const freshFrame =
+            document.createElement(
+                "iframe"
             );
 
-        pageURL.searchParams.delete(
-            "id"
+        freshFrame.id =
+            "zoneFrame";
+
+        freshFrame.title =
+            "GN-Shrub game";
+
+        freshFrame.allow =
+            "autoplay; fullscreen; gamepad; pointer-lock; clipboard-read; clipboard-write";
+
+        freshFrame.allowFullscreen =
+            true;
+
+        freshFrame.setAttribute(
+            "allowfullscreen",
+            ""
         );
 
-        pageURL.hash = "";
+        zoneFrame.parentNode
+            .replaceChild(
+                freshFrame,
+                zoneFrame
+            );
 
-        history.pushState(
-            {},
-            "",
-            pageURL
-        );
+        zoneFrame =
+            freshFrame;
+    }
+
+    if (updateHistory) {
+        try {
+            const pageURL =
+                new URL(
+                    window.location.href
+                );
+
+            pageURL.searchParams.delete(
+                "id"
+            );
+
+            pageURL.hash =
+                "";
+
+            history.pushState(
+                {},
+                "",
+                pageURL
+            );
+        } catch {}
     }
 }
 
 
-/* ------------------------------------------------------------
-   NEW TAB
------------------------------------------------------------- */
+/* ============================================================
+   OPEN IN NEW TAB
+   ============================================================ */
 
 async function aboutBlank() {
     if (!currentZone) {
@@ -1357,29 +2213,53 @@ async function aboutBlank() {
         return;
     }
 
+    const zoneAtClick =
+        currentZone;
+
     const rawURL =
         String(
-            currentZone.url ||
+            zoneAtClick.url ||
             ""
-        );
-
-    if (
-        /^https?:\/\//i.test(
-            rawURL
         )
-    ) {
-        window.open(
-            rawURL,
-            "_blank",
-            "noopener,noreferrer"
+            .trim();
+
+    if (!rawURL) {
+        showToast(
+            "This zone does not have a URL."
         );
 
         return;
     }
 
     /*
-        Open immediately so browsers do not block the popup after
-        the asynchronous fetch finishes.
+        Completely external zones can simply open directly.
+    */
+
+    if (
+        /^https?:\/\//i.test(
+            rawURL
+        )
+    ) {
+        const directURL =
+            safeExternalHref(
+                rawURL
+            );
+
+        if (directURL) {
+            window.open(
+                directURL,
+                "_blank",
+                "noopener,noreferrer"
+            );
+        }
+
+        return;
+    }
+
+    /*
+        MUST create about:blank synchronously here,
+        before awaiting fetch(), otherwise Safari and other
+        browsers can treat it as a popup and block it.
     */
 
     const newWindow =
@@ -1390,31 +2270,99 @@ async function aboutBlank() {
 
     if (!newWindow) {
         showToast(
-            "Your browser blocked the new tab."
+            "Your browser blocked the new tab. Allow popups and try again.",
+            3800
         );
 
         return;
     }
 
     try {
-        newWindow.document.title =
-            "Loading GN-Shrub...";
+        /*
+            Show something instead of a completely blank tab
+            while the launcher downloads.
+        */
 
-        newWindow.document.body.innerHTML =
-            "<p style='font-family:system-ui;padding:20px'>Loading...</p>";
+        newWindow.document.open();
+
+        newWindow.document.write(`
+            <!doctype html>
+            <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta
+                        name="viewport"
+                        content="width=device-width,initial-scale=1"
+                    >
+                    <title>Loading GN-Shrub...</title>
+
+                    <style>
+                        html,
+                        body {
+                            width: 100%;
+                            height: 100%;
+                            margin: 0;
+                        }
+
+                        body {
+                            display: grid;
+                            place-items: center;
+
+                            background: #07110b;
+                            color: #e2e8f0;
+
+                            font-family:
+                                system-ui,
+                                -apple-system,
+                                sans-serif;
+                        }
+
+                        p {
+                            opacity: .8;
+                        }
+                    </style>
+                </head>
+
+                <body>
+                    <p>
+                        Loading ${escapeHTML(
+                            zoneAtClick.name ||
+                            "game"
+                        )}...
+                    </p>
+                </body>
+            </html>
+        `);
+
+        newWindow.document.close();
 
         const url =
             zoneURL(
-                currentZone.url
+                rawURL
             );
 
         const html =
             await fetchTextChecked(
-                cacheBust(url)
+                cacheBust(
+                    url
+                )
             );
 
-        const fixedHTML =
-            injectZoneBase(
+        if (
+            !String(html || "")
+                .trim()
+        ) {
+            throw new Error(
+                "The game launcher returned an empty document."
+            );
+        }
+
+        /*
+            Same base fix as iframe mode.
+        */
+
+        const preparedHTML =
+            prepareGameHTML(
                 html,
                 url
             );
@@ -1422,7 +2370,7 @@ async function aboutBlank() {
         newWindow.document.open();
 
         newWindow.document.write(
-            fixedHTML
+            preparedHTML
         );
 
         newWindow.document.close();
@@ -1432,22 +2380,61 @@ async function aboutBlank() {
             error
         );
 
-        newWindow.document.open();
+        try {
+            newWindow.document.open();
 
-        newWindow.document.write(
-            `<p style="font-family:system-ui;padding:20px">
-                Failed to load this zone.
-            </p>`
-        );
+            newWindow.document.write(`
+                <!doctype html>
+                <html>
+                    <head>
+                        <meta charset="utf-8">
 
-        newWindow.document.close();
+                        <meta
+                            name="viewport"
+                            content="width=device-width,initial-scale=1"
+                        >
+
+                        <title>
+                            GN-Shrub - Load Error
+                        </title>
+                    </head>
+
+                    <body
+                        style="
+                            margin:0;
+                            padding:24px;
+                            background:#07110b;
+                            color:#e2e8f0;
+                            font-family:system-ui,-apple-system,sans-serif;
+                        "
+                    >
+                        <h2
+                            style="
+                                color:#4ade80;
+                                margin-top:0;
+                            "
+                        >
+                            Could not load this game
+                        </h2>
+
+                        <p>
+                            ${escapeHTML(
+                                error.message
+                            )}
+                        </p>
+                    </body>
+                </html>
+            `);
+
+            newWindow.document.close();
+        } catch {}
     }
 }
 
 
-/* ------------------------------------------------------------
-   DOWNLOAD
------------------------------------------------------------- */
+/* ============================================================
+   DOWNLOAD GAME HTML
+   ============================================================ */
 
 async function downloadZone() {
     if (!currentZone) {
@@ -1458,11 +2445,23 @@ async function downloadZone() {
         return;
     }
 
+    const zoneAtClick =
+        currentZone;
+
     const rawURL =
         String(
-            currentZone.url ||
+            zoneAtClick.url ||
             ""
+        )
+            .trim();
+
+    if (!rawURL) {
+        showToast(
+            "This zone does not have a URL."
         );
+
+        return;
+    }
 
     if (
         /^https?:\/\//i.test(
@@ -1484,23 +2483,22 @@ async function downloadZone() {
 
         const text =
             await fetchTextChecked(
-                cacheBust(url)
+                cacheBust(
+                    url
+                )
             );
 
-        /*
-            Include the corrected base URL in downloaded copies too,
-            so relative game files still have a chance to resolve.
-        */
-
         const fixedText =
-            injectZoneBase(
+            prepareGameHTML(
                 text,
                 url
             );
 
         const blob =
             new Blob(
-                [fixedText],
+                [
+                    fixedText
+                ],
                 {
                     type:
                         "text/html;charset=utf-8"
@@ -1522,7 +2520,7 @@ async function downloadZone() {
 
         link.download =
             `${safeFileName(
-                currentZone.name
+                zoneAtClick.name
             )}.html`;
 
         document.body.appendChild(
@@ -1534,10 +2532,11 @@ async function downloadZone() {
         link.remove();
 
         setTimeout(
-            () =>
+            () => {
                 URL.revokeObjectURL(
                     objectURL
-                ),
+                );
+            },
             1000
         );
     } catch (error) {
@@ -1554,11 +2553,19 @@ async function downloadZone() {
 }
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    FULLSCREEN
------------------------------------------------------------- */
+   ============================================================ */
 
 async function fullscreenZone() {
+    if (!zoneFrame) {
+        showToast(
+            "No game frame is open."
+        );
+
+        return;
+    }
+
     try {
         if (
             document.fullscreenElement
@@ -1571,20 +2578,31 @@ async function fullscreenZone() {
         if (
             zoneFrame.requestFullscreen
         ) {
-            await zoneFrame.requestFullscreen();
+            await zoneFrame
+                .requestFullscreen();
+
+            return;
         }
 
-        else if (
+        if (
             zoneFrame.webkitRequestFullscreen
         ) {
             zoneFrame.webkitRequestFullscreen();
+
+            return;
         }
 
-        else {
-            showToast(
-                "Fullscreen is not supported by this browser."
-            );
+        if (
+            zoneFrame.webkitEnterFullscreen
+        ) {
+            zoneFrame.webkitEnterFullscreen();
+
+            return;
         }
+
+        showToast(
+            "Fullscreen is not supported by this browser."
+        );
     } catch (error) {
         console.error(
             "Fullscreen failed:",
@@ -1598,19 +2616,33 @@ async function fullscreenZone() {
 }
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    POPUP
------------------------------------------------------------- */
+   ============================================================ */
 
 function openPopup(
     title,
     html
 ) {
+    if (
+        !popupOverlay ||
+        !popupTitle ||
+        !popupBody
+    ) {
+        return;
+    }
+
     popupTitle.textContent =
-        title;
+        String(
+            title ||
+            ""
+        );
 
     popupBody.innerHTML =
-        html;
+        String(
+            html ||
+            ""
+        );
 
     popupOverlay.style.display =
         "flex";
@@ -1623,6 +2655,10 @@ function openPopup(
 
 
 function closePopup() {
+    if (!popupOverlay) {
+        return;
+    }
+
     popupOverlay.style.display =
         "none";
 
@@ -1633,67 +2669,76 @@ function closePopup() {
 }
 
 
-popupOverlay.addEventListener(
-    "click",
-    event => {
-        if (
-            event.target ===
-            popupOverlay
-        ) {
-            closePopup();
+if (popupOverlay) {
+    popupOverlay.addEventListener(
+        "click",
+        event => {
+            if (
+                event.target ===
+                popupOverlay
+            ) {
+                closePopup();
+            }
         }
-    }
-);
+    );
+}
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    SETTINGS
------------------------------------------------------------- */
+   ============================================================ */
 
-settingsButton.addEventListener(
-    "click",
-    () => {
-        openPopup(
-            "Settings",
-            `
-                <button
-                    class="settings-button"
-                    type="button"
-                    onclick="tabCloak()"
-                >
-                    Tab Cloak
-                </button>
+if (settingsButton) {
+    settingsButton.addEventListener(
+        "click",
+        () => {
+            openPopup(
+                "Settings",
+                `
+                    <button
+                        class="settings-button"
+                        type="button"
+                        onclick="tabCloak()"
+                    >
+                        Tab Cloak
+                    </button>
 
-                <br><br>
+                    <br><br>
 
-                <button
-                    class="settings-button secondary"
-                    type="button"
-                    onclick="resetTabCloak()"
-                >
-                    Reset Tab Appearance
-                </button>
+                    <button
+                        class="settings-button secondary"
+                        type="button"
+                        onclick="resetTabCloak()"
+                    >
+                        Reset Tab Appearance
+                    </button>
 
-                <p style="
-                    margin: 1rem 0 0;
-                    font-size: .82rem;
-                    color: var(--text-muted);
-                ">
-                    GN-Shrub stays in dark mode.
-                </p>
-            `
-        );
-    }
-);
+                    <p
+                        style="
+                            margin:1rem 0 0;
+                            font-size:.82rem;
+                            color:var(--text-muted);
+                        "
+                    >
+                        GN-Shrub stays in dark mode.
+                    </p>
+                `
+            );
+        }
+    );
+}
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    TAB CLOAK
------------------------------------------------------------- */
+   ============================================================ */
 
 function cloakName(value) {
     const title =
-        String(value || "")
+        String(
+            value ||
+            ""
+        )
             .trim();
 
     document.title =
@@ -1715,7 +2760,10 @@ function cloakName(value) {
 
 function cloakIcon(value) {
     const icon =
-        String(value || "")
+        String(
+            value ||
+            ""
+        )
             .trim();
 
     let link =
@@ -1769,7 +2817,9 @@ function tabCloak() {
         "Tab Cloak",
         `
             <label class="popup-field">
-                <span>Tab Title</span>
+                <span>
+                    Tab Title
+                </span>
 
                 <input
                     type="text"
@@ -1780,7 +2830,9 @@ function tabCloak() {
             </label>
 
             <label class="popup-field">
-                <span>Tab Icon URL</span>
+                <span>
+                    Tab Icon URL
+                </span>
 
                 <input
                     type="url"
@@ -1800,32 +2852,45 @@ function tabCloak() {
         `
     );
 
-    document
-        .getElementById(
+    const saveButton =
+        document.getElementById(
             "save-cloak-button"
-        )
-        .addEventListener(
-            "click",
-            () => {
-                cloakName(
-                    document.getElementById(
-                        "cloak-title-input"
-                    ).value
-                );
-
-                cloakIcon(
-                    document.getElementById(
-                        "cloak-icon-input"
-                    ).value
-                );
-
-                closePopup();
-
-                showToast(
-                    "Tab appearance updated."
-                );
-            }
         );
+
+    if (!saveButton) {
+        return;
+    }
+
+    saveButton.addEventListener(
+        "click",
+        () => {
+            const titleInput =
+                document.getElementById(
+                    "cloak-title-input"
+                );
+
+            const iconInput =
+                document.getElementById(
+                    "cloak-icon-input"
+                );
+
+            cloakName(
+                titleInput?.value ||
+                ""
+            );
+
+            cloakIcon(
+                iconInput?.value ||
+                ""
+            );
+
+            closePopup();
+
+            showToast(
+                "Tab appearance updated."
+            );
+        }
+    );
 }
 
 
@@ -1868,20 +2933,24 @@ function restoreTabCloak() {
     }
 
     if (icon) {
-        cloakIcon(icon);
+        cloakIcon(
+            icon
+        );
     }
 }
 
 
-/* ------------------------------------------------------------
-   CONTACT / INFO
------------------------------------------------------------- */
+/* ============================================================
+   CONTACT
+   ============================================================ */
 
 function showContact() {
     openPopup(
         "Contact",
         `
-            <h3>GN-Shrub</h3>
+            <h3>
+                GN-Shrub
+            </h3>
 
             <p>
                 GN-Shrub is hosted at:
@@ -1901,13 +2970,19 @@ function showContact() {
 }
 
 
+/* ============================================================
+   DMCA
+   ============================================================ */
+
 function loadDMCA() {
     openPopup(
         "DMCA",
         `
             <div class="dmca-content">
 
-                <h3>Content Removal</h3>
+                <h3>
+                    Content Removal
+                </h3>
 
                 <p>
                     GN-Shrub acts as a frontend for game entries
@@ -1916,9 +2991,9 @@ function loadDMCA() {
 
                 <p>
                     If you own content displayed through GN-Shrub
-                    and want the GN-Shrub site to stop listing it,
-                    contact the maintainer of this site with the
-                    game name and proof of ownership.
+                    and want GN-Shrub to stop listing it, contact
+                    the maintainer of this site with the game name
+                    and proof of ownership.
                 </p>
 
             </div>
@@ -1927,22 +3002,27 @@ function loadDMCA() {
 }
 
 
+/* ============================================================
+   PRIVACY
+   ============================================================ */
+
 function loadPrivacy() {
     openPopup(
         "Privacy",
         `
             <div>
 
-                <h2>GN-Shrub Privacy</h2>
+                <h2>
+                    GN-Shrub Privacy
+                </h2>
 
                 <p>
                     GN-Shrub itself does not require an account.
                 </p>
 
                 <p>
-                    Search settings, tab appearance settings and
-                    imported GN-Shrub settings may be stored locally
-                    in your browser.
+                    Tab appearance and imported GN-Shrub settings
+                    may be stored locally in your browser.
                 </p>
 
                 <p>
@@ -1953,8 +3033,8 @@ function loadPrivacy() {
 
                 <p>
                     The Export Data button exports GN-Shrub's
-                    browser storage settings. It does not intentionally
-                    export your browser cookies.
+                    browser-storage settings. It does not
+                    intentionally export browser cookies.
                 </p>
 
             </div>
@@ -1963,20 +3043,11 @@ function loadPrivacy() {
 }
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    DATA EXPORT
+   ============================================================ */
 
-   Safer than the old implementation:
-   - no cookie dumping
-   - no arbitrary Cache Storage dumping
-   - no whole IndexedDB database dumping
-
-   It only exports GN-Shrub's local and session storage.
------------------------------------------------------------- */
-
-function storageToObject(
-    storage
-) {
+function storageToObject(storage) {
     const result = {};
 
     for (
@@ -1985,14 +3056,20 @@ function storageToObject(
         index++
     ) {
         const key =
-            storage.key(index);
+            storage.key(
+                index
+            );
 
-        if (key == null) {
+        if (
+            key == null
+        ) {
             continue;
         }
 
         result[key] =
-            storage.getItem(key);
+            storage.getItem(
+                key
+            );
     }
 
     return result;
@@ -2063,10 +3140,11 @@ async function saveData() {
         link.remove();
 
         setTimeout(
-            () =>
+            () => {
                 URL.revokeObjectURL(
                     url
-                ),
+                );
+            },
             1000
         );
 
@@ -2086,9 +3164,9 @@ async function saveData() {
 }
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    DATA IMPORT
------------------------------------------------------------- */
+   ============================================================ */
 
 function restoreStorageObject(
     storage,
@@ -2096,8 +3174,11 @@ function restoreStorageObject(
 ) {
     if (
         !value ||
-        typeof value !== "object" ||
-        Array.isArray(value)
+        typeof value !==
+            "object" ||
+        Array.isArray(
+            value
+        )
     ) {
         return;
     }
@@ -2107,7 +3188,9 @@ function restoreStorageObject(
             key,
             itemValue
         ]
-        of Object.entries(value)
+        of Object.entries(
+            value
+        )
     ) {
         if (
             typeof key !==
@@ -2119,7 +3202,8 @@ function restoreStorageObject(
         storage.setItem(
             key,
             String(
-                itemValue ?? ""
+                itemValue ??
+                ""
             )
         );
     }
@@ -2128,10 +3212,10 @@ function restoreStorageObject(
 
 async function loadData(event) {
     const input =
-        event.target;
+        event?.target;
 
     const file =
-        input.files?.[0];
+        input?.files?.[0];
 
     if (!file) {
         return;
@@ -2142,11 +3226,14 @@ async function loadData(event) {
             await file.text();
 
         const data =
-            JSON.parse(text);
+            JSON.parse(
+                text
+            );
 
         if (
             !data ||
-            typeof data !== "object"
+            typeof data !==
+                "object"
         ) {
             throw new Error(
                 "Invalid data file."
@@ -2178,16 +3265,17 @@ async function loadData(event) {
             "That file could not be imported."
         );
     } finally {
-        input.value = "";
+        if (input) {
+            input.value =
+                "";
+        }
     }
 }
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    DARK MODE
-
-   GN-Shrub intentionally stays dark.
------------------------------------------------------------- */
+   ============================================================ */
 
 function darkMode() {
     document.body.classList.add(
@@ -2196,9 +3284,9 @@ function darkMode() {
 }
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    KEYBOARD CONTROLS
------------------------------------------------------------- */
+   ============================================================ */
 
 document.addEventListener(
     "keydown",
@@ -2211,9 +3299,9 @@ document.addEventListener(
         }
 
         if (
-            popupOverlay.style
-                .display ===
-            "flex"
+            popupOverlay &&
+            popupOverlay.style.display ===
+                "flex"
         ) {
             closePopup();
 
@@ -2221,6 +3309,7 @@ document.addEventListener(
         }
 
         if (
+            zoneViewer &&
             !zoneViewer.hidden
         ) {
             closeZone();
@@ -2229,9 +3318,9 @@ document.addEventListener(
 );
 
 
-/* ------------------------------------------------------------
+/* ============================================================
    INITIALIZATION
------------------------------------------------------------- */
+   ============================================================ */
 
 async function initializeGNshrub() {
     document.body.classList.add(
@@ -2256,5 +3345,9 @@ async function initializeGNshrub() {
     await listZones();
 }
 
+
+/* ============================================================
+   START
+   ============================================================ */
 
 initializeGNshrub();
